@@ -120,8 +120,7 @@ Your screen has a few key areas:
 ### Exploring the Project Files
 
 - **`main.py`**: This is the main file where you will write your Python code. For now, this is the only file you need to focus on.
-- **Other Files**: You might see files like `.cursorrules`, `requirements.txt`, or `.vscode`.  
-  Don’t worry about these — they exist to make the environment easier and to guide the AI assistant.
+- **Other Files**: You might see files like `.cursorrules`, `.github/copilot-instructions.md`,`requirements.txt`, or `.vscode`. Don’t worry about these — they exist to make the environment easier and to guide the AI assistant.
 
 ---
 
