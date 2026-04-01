@@ -12,6 +12,7 @@ class UploadedClothingItemSchema(BaseModel):
     style: str
     warmth_level: str
     weather_suitability: str
+    gender: str
     notes: str
 
 

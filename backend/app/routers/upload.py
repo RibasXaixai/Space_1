@@ -54,6 +54,7 @@ async def upload_clothing(files: list[UploadFile] = File(...)):
                 style=analysis.style,
                 warmth_level=analysis.warmth_level,
                 weather_suitability=analysis.weather_suitability,
+                gender=analysis.gender,
                 notes=analysis.notes,
             )
 

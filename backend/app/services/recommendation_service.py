@@ -62,6 +62,26 @@ class RecommendationService:
             "location": location,
         }
 
+    def refresh_recommendation_for_day(
+        self,
+        day: int,
+        clothing_data: list[ClothingAnalysisSchema],
+        weather_forecast: list[WeatherForecastSchema],
+    ) -> dict:
+        """Regenerate recommendation for a single selected day."""
+        if day < 1:
+            raise ValueError("day must be >= 1")
+
+        if not clothing_data:
+            raise ValueError("No clothing data provided")
+
+        if not weather_forecast or day > len(weather_forecast):
+            raise ValueError("Requested day is outside available weather forecast")
+
+        clothing_items = [item.model_dump() for item in clothing_data]
+        day_forecast = weather_forecast[day - 1].model_dump()
+        return self._build_outfit_for_day(clothing_items, day_forecast, day)
+
     def _build_outfit_for_day(self, clothing_items: list[dict], day_forecast: dict, day_num: int) -> dict:
         """Build an outfit and evaluate if it is viable for the day weather."""
         temp = int(day_forecast.get("temperature", 20))

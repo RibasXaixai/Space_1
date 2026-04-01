@@ -1,5 +1,7 @@
 import { api } from "./api";
 import type {
+  RecommendationRefreshDayRequest,
+  RecommendationRefreshDayResponse,
   RecommendationsGenerateRequest,
   RecommendationsGenerateResponse,
   WeatherForecastRequest,
@@ -12,6 +14,10 @@ export function getWeatherForecastPhase2(payload: WeatherForecastRequest) {
 
 export function generateRecommendationsPhase2(payload: RecommendationsGenerateRequest) {
   return api.post<RecommendationsGenerateResponse>("/recommendations/generate", payload);
+}
+
+export function refreshRecommendationDayPhase2(payload: RecommendationRefreshDayRequest) {
+  return api.post<RecommendationRefreshDayResponse>("/recommendations/refresh-day", payload);
 }
 
 export function uploadClothingPhase2(formData: FormData) {

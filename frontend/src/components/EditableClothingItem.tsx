@@ -20,6 +20,7 @@ export default function EditableClothingItem({
       style: "",
       warmth_level: "",
       weather_suitability: "",
+      gender: "Unisex",
       notes: "",
     }
   );
@@ -55,6 +56,7 @@ export default function EditableClothingItem({
   const styles = ["Casual", "Formal", "Smart Casual", "Athletic", "Vintage", "Modern", "Streetwear", "Classic"];
   const warmthLevels = ["Light", "Medium", "Heavy"];
   const weatherOptions = ["Spring/Summer", "Fall/Winter", "All-Weather", "VariableSeason", "Indoor"];
+  const genderOptions = ["Male", "Female", "Unisex"];
 
   const handleSaveEdits = () => {
     onAnalysisChange(item.id, editData);
@@ -155,6 +157,22 @@ export default function EditableClothingItem({
                 ))}
               </select>
             </div>
+
+            <div className="col-span-2">
+              <label className="block text-xs font-semibold text-slate-700 mb-1">Gender</label>
+              <select
+                value={editData.gender}
+                onChange={(e) => setEditData({ ...editData, gender: e.target.value })}
+                className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
+              >
+                <option value="">Select gender</option>
+                {genderOptions.map((opt) => (
+                  <option key={opt} value={opt}>
+                    {opt}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
 
           <div>
@@ -242,6 +260,10 @@ export default function EditableClothingItem({
             <div>
               <p className="text-slate-500">Weather</p>
               <p className="font-medium text-slate-900">{item.analyzed.weather_suitability}</p>
+            </div>
+            <div>
+              <p className="text-slate-500">Gender</p>
+              <p className="font-medium text-slate-900">{item.analyzed.gender || "Unisex"}</p>
             </div>
           </div>
         )}

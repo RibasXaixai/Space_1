@@ -8,6 +8,7 @@ class ClothingAnalysisSchema(BaseModel):
     style: str
     warmth_level: str
     weather_suitability: str
+    gender: str = "Unisex"
     notes: str
 
 
@@ -62,4 +63,17 @@ class RecommendationsGenerateResponse(BaseModel):
     success: bool
     recommendations: list[RecommendationSchema]
     warnings: list[str] = []
+    message: Optional[str] = None
+
+
+class RecommendationRefreshDayRequest(BaseModel):
+    day: int
+    clothing_data: list[ClothingAnalysisSchema]
+    weather_forecast: list[WeatherForecastSchema]
+    location: str
+
+
+class RecommendationRefreshDayResponse(BaseModel):
+    success: bool
+    recommendation: RecommendationSchema
     message: Optional[str] = None

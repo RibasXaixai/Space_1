@@ -14,6 +14,7 @@ class ClothingAnalysisService:
     FALLBACK_STYLES = ["Casual", "Formal", "Smart Casual", "Athletic", "Vintage", "Modern", "Streetwear", "Classic"]
     FALLBACK_WARMTH_LEVELS = ["Light", "Medium", "Heavy"]
     FALLBACK_WEATHER_SUITABILITY = ["Spring/Summer", "Fall/Winter", "All-Weather", "VariableSeason", "Indoor"]
+    FALLBACK_GENDERS = ["Unisex", "Male", "Female"]
     
     def __init__(self):
         try:
@@ -94,6 +95,12 @@ class ClothingAnalysisService:
             self.FALLBACK_WEATHER_SUITABILITY,
             "weather_suitability"
         )
+
+        gender = self._validate_field(
+            analysis.get("gender"),
+            self.FALLBACK_GENDERS,
+            "gender"
+        )
         
         notes = analysis.get("notes", "")
         if not isinstance(notes, str) or not notes.strip():
@@ -105,6 +112,7 @@ class ClothingAnalysisService:
             style=style,
             warmth_level=warmth_level,
             weather_suitability=weather_suitability,
+            gender=gender,
             notes=notes.strip(),
         )
     
@@ -162,6 +170,18 @@ class ClothingAnalysisService:
                 "light gray": "Gray",
                 "dark gray": "Gray",
             },
+            "gender": {
+                "man": "Male",
+                "male": "Male",
+                "mens": "Male",
+                "boy": "Male",
+                "woman": "Female",
+                "female": "Female",
+                "womens": "Female",
+                "girl": "Female",
+                "unisex": "Unisex",
+                "neutral": "Unisex",
+            },
         }
 
         if field_name in aliases:
@@ -203,5 +223,6 @@ class ClothingAnalysisService:
             style=style,
             warmth_level=warmth,
             weather_suitability=weather,
+            gender=random.choice(self.FALLBACK_GENDERS),
             notes=notes,
         )

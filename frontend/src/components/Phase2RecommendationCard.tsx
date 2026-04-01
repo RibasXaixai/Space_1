@@ -1,7 +1,55 @@
-import type { Recommendation } from "../types/phase2";
+import type { Recommendation, UploadedClothing } from "../types/phase2";
 
 interface RecommendationCardProps {
   recommendation: Recommendation;
+  wardrobeItems: UploadedClothing[];
+}
+
+function normalizeLabel(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]/g, "").trim();
+}
+
+function canonicalCategory(value: string): string {
+  const normalized = normalizeLabel(value);
+  const aliases: Record<string, string> = {
+    tee: "tshirt",
+    tshirt: "tshirt",
+    tshirts: "tshirt",
+    shirt: "shirt",
+    shirts: "shirt",
+    blouse: "shirt",
+    top: "shirt",
+    tops: "shirt",
+    jean: "jeans",
+    jeans: "jeans",
+    trouser: "pants",
+    trousers: "pants",
+    pant: "pants",
+    pants: "pants",
+    short: "shorts",
+    shorts: "shorts",
+    hoodie: "hoodie",
+    hoodies: "hoodie",
+    jacket: "jacket",
+    jackets: "jacket",
+    coat: "jacket",
+    sweater: "sweater",
+    sweaters: "sweater",
+    jumper: "sweater",
+    dress: "dress",
+    dresses: "dress",
+    skirt: "skirt",
+    skirts: "skirt",
+  };
+
+  return aliases[normalized] || normalized;
+}
+
+function categoriesMatch(recommended: string, wardrobeCategory: string): boolean {
+  const rec = canonicalCategory(recommended);
+  const ward = canonicalCategory(wardrobeCategory);
+  if (!rec || !ward) return false;
+  return rec === ward || rec.includes(ward) || ward.includes(rec);
 }
 
 function weatherIcon(condition: string): string {
@@ -23,7 +71,7 @@ function parseWeatherMatch(weatherMatch: string): { condition: string; temp: str
   return { condition, temp };
 }
 
-export default function RecommendationCard({ recommendation }: RecommendationCardProps) {
+export default function RecommendationCard({ recommendation, wardrobeItems }: RecommendationCardProps) {
   const daysOfWeek = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
   // Force noon UTC to avoid timezone-offset day shifts
   const date = new Date(recommendation.date + "T12:00:00");
@@ -32,6 +80,18 @@ export default function RecommendationCard({ recommendation }: RecommendationCar
   const confidence = Math.round(recommendation.confidence * 100);
   const { condition, temp } = parseWeatherMatch(recommendation.weather_match);
   const icon = weatherIcon(condition);
+  const usedWardrobeIds = new Set<string>();
+
+  const itemVisuals = recommendation.clothing_items.map((label) => {
+    const match =
+      wardrobeItems.find((item) => {
+        if (usedWardrobeIds.has(item.id)) return false;
+        return categoriesMatch(label, item.analyzed?.category || "");
+      }) || null;
+
+    if (match) usedWardrobeIds.add(match.id);
+    return { label, match };
+  });
 
   return (
     <div className={`overflow-hidden rounded-3xl shadow-lg border ${isViable ? "border-slate-200" : "border-amber-300"}`}>
@@ -84,22 +144,38 @@ export default function RecommendationCard({ recommendation }: RecommendationCar
           <p className="text-sm leading-relaxed text-slate-700">{recommendation.outfit_description}</p>
         </div>
 
-        {/* Clothing item chips */}
+        {/* Clothing item images */}
         <div>
           <p className="mb-2 text-xs font-bold uppercase tracking-widest text-slate-400">Items</p>
-          <div className="flex flex-wrap gap-2">
-            {recommendation.clothing_items.map((item, idx) => (
-              <span
-                key={idx}
-                className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold ${
-                  item === "No suitable outfit found"
-                    ? "border border-red-200 bg-red-50 text-red-700"
-                    : "border border-sky-200 bg-sky-50 text-sky-700"
+          <div className="flex flex-wrap gap-3">
+            {itemVisuals.map(({ label, match }, idx) => (
+              <div
+                key={`${label}-${idx}`}
+                className={`w-24 overflow-hidden rounded-2xl border bg-slate-50 ${
+                  match ? "border-slate-200" : "border-amber-200"
                 }`}
               >
-                {item !== "No suitable outfit found" && <span>👔</span>}
-                {item}
-              </span>
+                {match ? (
+                  <img
+                    src={match.preview}
+                    alt={label}
+                    className="h-24 w-full object-cover"
+                  />
+                ) : (
+                  <div className="flex h-24 w-full items-center justify-center bg-slate-100 text-2xl">👕</div>
+                )}
+                <div className="px-2 py-1.5">
+                  <p className="truncate text-xs font-semibold text-slate-900">{label}</p>
+                  <p className="truncate text-[11px] text-slate-500">
+                    {match?.analyzed?.color || (label === "No suitable outfit found" ? "No match" : "Not found")}
+                  </p>
+                  {match?.analyzed?.gender && (
+                    <span className="mt-1 inline-block rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-[10px] font-semibold text-violet-700">
+                      {match.analyzed.gender}
+                    </span>
+                  )}
+                </div>
+              </div>
             ))}
           </div>
         </div>

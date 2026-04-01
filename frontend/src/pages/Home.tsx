@@ -9,6 +9,7 @@ import Phase2FeedbackButtons from "../components/Phase2FeedbackButtons";
 import {
   generateRecommendationsPhase2,
   getWeatherForecastPhase2,
+  refreshRecommendationDayPhase2,
   uploadClothingPhase2,
 } from "../services/phase2";
 import type {
@@ -29,6 +30,7 @@ interface UploadedClothingFromAPI {
   style: string;
   warmth_level: string;
   weather_suitability: string;
+  gender: "Male" | "Female" | "Unisex" | string;
   notes: string;
 }
 
@@ -43,6 +45,7 @@ export default function Home() {
   const [recommendations, setRecommendations] = useState<Recommendation[] | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
   const [feedbackByDay, setFeedbackByDay] = useState<Record<number, FeedbackValue | null>>({});
+  const [refreshingDay, setRefreshingDay] = useState<number | null>(null);
   const [uploadedFromAPI, setUploadedFromAPI] = useState(false);
   const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
@@ -85,6 +88,7 @@ export default function Home() {
             style: item.style,
             warmth_level: item.warmth_level,
             weather_suitability: item.weather_suitability,
+            gender: item.gender,
             notes: item.notes,
           },
         })
@@ -176,6 +180,7 @@ export default function Home() {
         style: item.analyzed?.style || "",
         warmth_level: item.analyzed?.warmth_level || "",
         weather_suitability: item.analyzed?.weather_suitability || "",
+        gender: item.analyzed?.gender || "Unisex",
         notes: item.analyzed?.notes || "",
       }));
 
@@ -200,6 +205,45 @@ export default function Home() {
       ...prev,
       [day]: prev[day] === value ? null : value,
     }));
+  };
+
+  const handleRefreshDay = async (day: number) => {
+    if (!weather || weather.length === 0) {
+      setError("Weather forecast is missing. Generate forecast again first.");
+      return;
+    }
+
+    setError(null);
+    setRefreshingDay(day);
+
+    try {
+      const clothingAnalyses = uploadedClothing.map((item) => ({
+        category: item.analyzed?.category || "",
+        color: item.analyzed?.color || "",
+        style: item.analyzed?.style || "",
+        warmth_level: item.analyzed?.warmth_level || "",
+        weather_suitability: item.analyzed?.weather_suitability || "",
+        gender: item.analyzed?.gender || "Unisex",
+        notes: item.analyzed?.notes || "",
+      }));
+
+      const response = await refreshRecommendationDayPhase2({
+        day,
+        clothing_data: clothingAnalyses,
+        weather_forecast: weather,
+        location,
+      });
+
+      const refreshed = response.data.recommendation;
+      setRecommendations((prev) => {
+        if (!prev) return prev;
+        return prev.map((item) => (item.day === day ? refreshed : item));
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to refresh this day.");
+    } finally {
+      setRefreshingDay(null);
+    }
   };
 
   return (
@@ -399,7 +443,17 @@ export default function Home() {
           <div className="grid gap-6 md:grid-cols-2">
             {recommendations.map((rec) => (
               <div key={rec.day} className="flex flex-col gap-3">
-                <Phase2RecommendationCard recommendation={rec} />
+                <Phase2RecommendationCard recommendation={rec} wardrobeItems={uploadedClothing} />
+                <div className="flex justify-center">
+                  <button
+                    type="button"
+                    onClick={() => handleRefreshDay(rec.day)}
+                    disabled={refreshingDay === rec.day}
+                    className="rounded-full border border-indigo-200 bg-indigo-50 px-5 py-2 text-sm font-semibold text-indigo-700 transition hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {refreshingDay === rec.day ? "Refreshing..." : "Refresh day"}
+                  </button>
+                </div>
                 <Phase2FeedbackButtons
                   onLike={() => handleFeedback(rec.day, "like")}
                   onDislike={() => handleFeedback(rec.day, "dislike")}

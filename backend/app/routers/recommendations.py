@@ -3,6 +3,8 @@ from app.services.recommendation_service import RecommendationService
 from app.schemas.phase2 import (
     RecommendationsGenerateRequest,
     RecommendationsGenerateResponse,
+    RecommendationRefreshDayRequest,
+    RecommendationRefreshDayResponse,
     RecommendationSchema,
 )
 
@@ -49,4 +51,29 @@ def generate_recommendations(request: RecommendationsGenerateRequest):
         recommendations=recommendations,
         warnings=warnings,
         message=f"Successfully generated 5-day outfit recommendations for {request.location} based on your wardrobe and weather forecast.",
+    )
+
+
+@router.post("/refresh-day", response_model=RecommendationRefreshDayResponse)
+def refresh_recommendation_day(request: RecommendationRefreshDayRequest):
+    """Regenerate recommendation for one specific day using the same wardrobe and forecast."""
+    if not recommendation_service:
+        raise HTTPException(
+            status_code=503,
+            detail="Recommendation service is not available. Please try again later.",
+        )
+
+    try:
+        refreshed = recommendation_service.refresh_recommendation_for_day(
+            day=request.day,
+            clothing_data=request.clothing_data,
+            weather_forecast=request.weather_forecast,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return RecommendationRefreshDayResponse(
+        success=True,
+        recommendation=RecommendationSchema(**refreshed),
+        message=f"Successfully refreshed recommendation for day {request.day}.",
     )

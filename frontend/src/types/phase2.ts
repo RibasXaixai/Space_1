@@ -12,6 +12,7 @@ export interface ClothingAnalysis {
   style: string;
   warmth_level: string;
   weather_suitability: string;
+  gender: "Male" | "Female" | "Unisex" | string;
   notes: string;
 }
 
@@ -66,5 +67,18 @@ export interface RecommendationsGenerateResponse {
   success: boolean;
   recommendations: Recommendation[];
   warnings: string[];
+  message?: string;
+}
+
+export interface RecommendationRefreshDayRequest {
+  day: number;
+  clothing_data: ClothingAnalysis[];
+  weather_forecast: WeatherForecast[];
+  location: string;
+}
+
+export interface RecommendationRefreshDayResponse {
+  success: boolean;
+  recommendation: Recommendation;
   message?: string;
 }

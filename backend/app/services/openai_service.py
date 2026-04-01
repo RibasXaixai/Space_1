@@ -84,6 +84,7 @@ class OpenAIService:
     "style": "Style category (Casual, Formal, Smart Casual, Athletic, Vintage, Modern, Streetwear, or Classic)",
     "warmth_level": "How warm the item is (Light, Medium, or Heavy)",
     "weather_suitability": "Best weather for this item (Spring/Summer, Fall/Winter, All-Weather, VariableSeason, or Indoor)",
+    "gender": "Target gender style (Male, Female, or Unisex)",
     "notes": "A brief, helpful note about this clothing item (1-2 sentences)"
 }
 
