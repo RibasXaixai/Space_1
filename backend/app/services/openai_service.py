@@ -22,7 +22,8 @@ class OpenAIService:
             raise ImportError("openai package is required. Install with: pip install openai")
         
         self.client = OpenAI(api_key=api_key)
-        self.model = "gpt-4-turbo"
+        # Use a vision-capable model by default. Can be overridden via OPENAI_MODEL.
+        self.model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
     def analyze_clothing_image(self, file_path: str) -> Optional[dict]:
         """
@@ -59,7 +60,12 @@ class OpenAIService:
             # Create message with vision
             response = self.client.chat.completions.create(
                 model=self.model,
+                temperature=0,
                 messages=[
+                    {
+                        "role": "system",
+                        "content": "You are a strict clothing image analyzer. Return only valid JSON with the requested keys.",
+                    },
                     {
                         "role": "user",
                         "content": [
@@ -71,7 +77,7 @@ class OpenAIService:
                             },
                             {
                                 "type": "text",
-                                "text": """Analyze this clothing item image and return a JSON object with the following fields:
+                                "text": """Analyze the MAIN visible clothing item in this photo and return a JSON object with the following fields:
 {
     "category": "Type of clothing (e.g., T-Shirt, Jeans, Jacket, Sweater, Dress, etc.)",
     "color": "Primary color of the item",
@@ -81,7 +87,13 @@ class OpenAIService:
     "notes": "A brief, helpful note about this clothing item (1-2 sentences)"
 }
 
-Return ONLY valid JSON, no other text. Be concise and accurate."""
+Rules:
+- Focus only on the garment itself, ignore background and lighting artifacts.
+- If uncertain, choose the closest reasonable clothing value.
+- Return ONLY valid JSON with double quotes and no markdown.
+- Do not include explanations outside JSON.
+
+Be concise and accurate."""
                             }
                         ],
                     }
@@ -89,8 +101,19 @@ Return ONLY valid JSON, no other text. Be concise and accurate."""
             )
 
             # Parse response
-            response_text = response.choices[0].message.content
-            analysis = json.loads(response_text)
+            response_text = response.choices[0].message.content or ""
+
+            # Handle occasional markdown-wrapped responses (```json ... ```)
+            cleaned = response_text.strip()
+            if cleaned.startswith("```"):
+                cleaned = cleaned.strip("`")
+                if cleaned.lower().startswith("json"):
+                    cleaned = cleaned[4:].strip()
+
+            if "{" in cleaned and "}" in cleaned:
+                cleaned = cleaned[cleaned.find("{") : cleaned.rfind("}") + 1]
+
+            analysis = json.loads(cleaned)
             
             return analysis
 

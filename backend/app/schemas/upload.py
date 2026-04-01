@@ -6,6 +6,7 @@ class UploadedClothingItemSchema(BaseModel):
     """Schema for a single uploaded clothing item with its analysis."""
     id: str
     file_path: str
+    analysis_source: str
     category: str
     color: str
     style: str

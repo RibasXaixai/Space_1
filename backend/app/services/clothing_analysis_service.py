@@ -1,4 +1,6 @@
 import random
+import re
+import difflib
 from app.schemas.phase2 import ClothingAnalysisSchema
 from app.services.openai_service import OpenAIService
 
@@ -40,6 +42,20 @@ class ClothingAnalysisService:
         
         # Fallback to mock analysis
         return self._generate_mock_analysis()
+
+    def analyze_clothing_with_source(self, file_path: str) -> tuple[ClothingAnalysisSchema, str]:
+        """
+        Analyze clothing and return both normalized result and source marker.
+
+        Returns:
+            tuple[ClothingAnalysisSchema, str]: (analysis, "ai" | "fallback")
+        """
+        if self.use_ai:
+            analysis = self.openai_service.analyze_clothing_image(file_path)
+            if analysis:
+                return self._validate_and_normalize_analysis(analysis), "ai"
+
+        return self._generate_mock_analysis(), "fallback"
     
     def _validate_and_normalize_analysis(self, analysis: dict) -> ClothingAnalysisSchema:
         """
@@ -94,19 +110,82 @@ class ClothingAnalysisService:
     
     def _validate_field(self, value: any, valid_options: list, field_name: str) -> str:
         """
-        Validate a field value against valid options.
-        
-        Returns the value if it's in valid_options, otherwise returns a random fallback.
+        Validate and normalize a field value against valid options.
+
+        Uses deterministic fuzzy matching first, then safe fallback.
         """
-        if isinstance(value, str) and value in valid_options:
-            return value
-        
-        # Use fallback if invalid or missing
-        fallback = random.choice(valid_options)
-        if value and not isinstance(value, str):
-            print(f"Warning: {field_name} has invalid type {type(value).__name__}, using fallback: {fallback}")
-        
-        return fallback
+        if not isinstance(value, str) or not value.strip():
+            return valid_options[0]
+
+        raw = value.strip()
+
+        # Exact match
+        if raw in valid_options:
+            return raw
+
+        # Case-insensitive exact match
+        lower_to_option = {opt.lower(): opt for opt in valid_options}
+        raw_lower = raw.lower()
+        if raw_lower in lower_to_option:
+            return lower_to_option[raw_lower]
+
+        # Field-specific aliases for common model outputs
+        aliases = {
+            "weather_suitability": {
+                "spring": "Spring/Summer",
+                "summer": "Spring/Summer",
+                "fall": "Fall/Winter",
+                "autumn": "Fall/Winter",
+                "winter": "Fall/Winter",
+                "all weather": "All-Weather",
+                "all-weather": "All-Weather",
+                "variable season": "VariableSeason",
+                "variable": "VariableSeason",
+            },
+            "warmth_level": {
+                "lightweight": "Light",
+                "thin": "Light",
+                "mid": "Medium",
+                "moderate": "Medium",
+                "thick": "Heavy",
+                "warm": "Heavy",
+            },
+            "style": {
+                "sport": "Athletic",
+                "sporty": "Athletic",
+                "smart-casual": "Smart Casual",
+                "smart casual": "Smart Casual",
+            },
+            "color": {
+                "dark blue": "Navy",
+                "navy blue": "Navy",
+                "light gray": "Gray",
+                "dark gray": "Gray",
+            },
+        }
+
+        if field_name in aliases:
+            for alias, mapped in aliases[field_name].items():
+                if alias in raw_lower:
+                    return mapped
+
+        # Substring match against valid options
+        for opt in valid_options:
+            if opt.lower() in raw_lower or raw_lower in opt.lower():
+                return opt
+
+        # Fuzzy nearest option to avoid random mismatches
+        nearest = difflib.get_close_matches(raw, valid_options, n=1, cutoff=0.72)
+        if nearest:
+            return nearest[0]
+
+        # Preserve meaningful free-text for category/color instead of randomizing.
+        if field_name in {"category", "color"}:
+            normalized = re.sub(r"\s+", " ", raw).strip()
+            return normalized[:40]
+
+        # Final deterministic fallback
+        return valid_options[0]
     
     def _generate_mock_analysis(self) -> ClothingAnalysisSchema:
         """Generate mock analysis as fallback when OpenAI is unavailable."""

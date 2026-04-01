@@ -23,6 +23,7 @@ import type {
 interface UploadedClothingFromAPI {
   id: string;
   file_path: string;
+  analysis_source: "ai" | "fallback";
   category: string;
   color: string;
   style: string;
@@ -77,6 +78,7 @@ export default function Home() {
           id: item.id,
           file: new File([], item.file_path), // Placeholder file object
           preview: `${apiUrl}/${item.file_path}`,
+          analysis_source: item.analysis_source,
           analyzed: {
             category: item.category,
             color: item.color,
@@ -207,7 +209,6 @@ export default function Home() {
         <div className="pointer-events-none absolute -top-20 right-0 h-48 w-48 rounded-full bg-cyan-200/50 blur-3xl" />
         <div className="pointer-events-none absolute -bottom-16 left-10 h-44 w-44 rounded-full bg-blue-200/40 blur-3xl" />
         <div className="relative max-w-4xl">
-          <p className="text-xs font-semibold uppercase tracking-[0.22em] text-sky-700">Phase 9</p>
           <h1 className="mt-3 text-3xl font-bold text-slate-900 sm:text-5xl">
             Amazing Wardrobe Planner
           </h1>

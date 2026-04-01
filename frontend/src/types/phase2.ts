@@ -2,6 +2,7 @@ export interface UploadedClothing {
   id: string;
   file: File;
   preview: string;
+  analysis_source?: "ai" | "fallback";
   analyzed?: ClothingAnalysis;
 }
 

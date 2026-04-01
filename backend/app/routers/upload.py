@@ -42,12 +42,13 @@ async def upload_clothing(files: list[UploadFile] = File(...)):
             file_path = save_uploaded_file(content, file.filename or "image.jpg")
 
             # Analyze clothing using OpenAI (or mock fallback)
-            analysis = analysis_service.analyze_clothing(file_path)
+            analysis, analysis_source = analysis_service.analyze_clothing_with_source(file_path)
 
             # Create response item
             item = UploadedClothingItemSchema(
                 id=str(uuid.uuid4()),
                 file_path=file_path,
+                analysis_source=analysis_source,
                 category=analysis.category,
                 color=analysis.color,
                 style=analysis.style,
