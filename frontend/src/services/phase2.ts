@@ -27,3 +27,7 @@ export function uploadClothingPhase2(formData: FormData) {
     },
   });
 }
+
+export function checkDuplicatesPhase2(items: { id: string; file_path: string }[]) {
+  return api.post("/check-duplicates", { items });
+}

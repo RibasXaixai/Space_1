@@ -1,9 +1,19 @@
+export type ClothingItemStatus = "analyzed" | "needs_review" | "rejected";
+
 export interface UploadedClothing {
   id: string;
   file: File;
   preview: string;
+  file_path?: string;
   analysis_source?: "ai" | "fallback";
+  status?: ClothingItemStatus;
+  review_reason?: string;
+  review_issue?: string;
+  reject_reason?: string;
+  validation_warning?: string;  // Non-blocking hint (e.g., below recommended resolution)
   analyzed?: ClothingAnalysis;
+  is_exact_duplicate?: boolean;
+  is_similar_duplicate?: boolean;
 }
 
 export interface ClothingAnalysis {
@@ -14,6 +24,7 @@ export interface ClothingAnalysis {
   weather_suitability: string;
   gender: "Male" | "Female" | "Unisex" | string;
   notes: string;
+  confidence_score?: number;
 }
 
 export interface Recommendation {
@@ -23,6 +34,7 @@ export interface Recommendation {
   clothing_items: string[];
   weather_match: string;
   confidence: number;
+  recommendation_source?: "ai" | "rule-based" | string;
   is_viable: boolean;
   day_warning?: string;
 }

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import UploadArea from "../components/UploadArea";
 import LocationInput from "../components/LocationInput";
 import EditableClothingItem from "../components/EditableClothingItem";
@@ -11,8 +11,11 @@ import {
   getWeatherForecastPhase2,
   refreshRecommendationDayPhase2,
   uploadClothingPhase2,
+  checkDuplicatesPhase2,
 } from "../services/phase2";
+import { validateImageFile } from "../utils/imageValidation";
 import type {
+  ClothingItemStatus,
   UploadedClothing,
   ClothingAnalysis,
   Recommendation,
@@ -25,6 +28,10 @@ interface UploadedClothingFromAPI {
   id: string;
   file_path: string;
   analysis_source: "ai" | "fallback";
+  status?: ClothingItemStatus;
+  review_reason?: string;
+  review_issue?: string;
+  reject_reason?: string;
   category: string;
   color: string;
   style: string;
@@ -36,6 +43,8 @@ interface UploadedClothingFromAPI {
 
 export default function Home() {
   type FeedbackValue = "like" | "dislike";
+  const BATCH_SIZE = 10;
+  const REFRESH_COOLDOWN_MS = 15000;
   const [uploadedClothing, setUploadedClothing] = useState<UploadedClothing[]>([]);
   const [location, setLocation] = useState<string>("");
   const [weather, setWeather] = useState<WeatherForecast[] | null>(null);
@@ -45,56 +54,188 @@ export default function Home() {
   const [recommendations, setRecommendations] = useState<Recommendation[] | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
   const [feedbackByDay, setFeedbackByDay] = useState<Record<number, FeedbackValue | null>>({});
+  const [recommendationCountByDay, setRecommendationCountByDay] = useState<Record<number, number>>({});
   const [refreshingDay, setRefreshingDay] = useState<number | null>(null);
+  const [refreshCooldownUntilByDay, setRefreshCooldownUntilByDay] = useState<Record<number, number>>({});
+  const [uploadProgress, setUploadProgress] = useState<{ uploaded: number; total: number }>({
+    uploaded: 0,
+    total: 0,
+  });
   const [uploadedFromAPI, setUploadedFromAPI] = useState(false);
+  const wasUploadingRef = useRef(false);
   const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
   const hasUploadedItems = uploadedClothing.length > 0;
+  const isUploading = loading && uploadProgress.total > 0;
   const hasWeather = weather !== null && weather.length > 0;
   const hasRecommendations = recommendations !== null;
   const canGenerate = hasUploadedItems && location.trim().length > 0 && hasWeather && !loading;
   const totalLikes = Object.values(feedbackByDay).filter((value) => value === "like").length;
   const totalDislikes = Object.values(feedbackByDay).filter((value) => value === "dislike").length;
 
+  const isNaCategory = (category: string | undefined): boolean => {
+    const normalized = (category || "").trim().toLowerCase();
+    return ["n/a", "na", "none", "unknown", "not available", "not_applicable"].includes(normalized);
+  };
+
+  const normalizeCategoryLabel = (category: string | undefined): string => {
+    return isNaCategory(category) ? "Needs Review" : (category || "");
+  };
+
+  const resolveItemStatus = (item: UploadedClothingFromAPI): ClothingItemStatus => {
+    if (isNaCategory(item.category)) {
+      return "needs_review";
+    }
+
+    if (item.status === "analyzed" || item.status === "needs_review" || item.status === "rejected") {
+      return item.status;
+    }
+
+    // Default fallback: if analysis fell back, require review before use.
+    return item.analysis_source === "fallback" ? "needs_review" : "analyzed";
+  };
+
+  const playUploadFinishedSound = () => {
+    try {
+      const maybeAudioContext = (globalThis as any).AudioContext;
+      if (!maybeAudioContext) return;
+
+      const audioContext = new maybeAudioContext();
+      const gainNode = audioContext.createGain();
+      gainNode.connect(audioContext.destination);
+
+      const note1 = audioContext.createOscillator();
+      note1.type = "sine";
+      note1.frequency.setValueAtTime(784, audioContext.currentTime);
+      note1.connect(gainNode);
+
+      const note2 = audioContext.createOscillator();
+      note2.type = "sine";
+      note2.frequency.setValueAtTime(1047, audioContext.currentTime + 0.1);
+      note2.connect(gainNode);
+
+      gainNode.gain.setValueAtTime(0.0001, audioContext.currentTime);
+      gainNode.gain.exponentialRampToValueAtTime(0.06, audioContext.currentTime + 0.02);
+      gainNode.gain.exponentialRampToValueAtTime(0.0001, audioContext.currentTime + 0.24);
+
+      note1.start(audioContext.currentTime);
+      note1.stop(audioContext.currentTime + 0.1);
+      note2.start(audioContext.currentTime + 0.1);
+      note2.stop(audioContext.currentTime + 0.24);
+
+      setTimeout(() => {
+        audioContext.close().catch(() => {
+          // Ignore close errors to keep UX smooth.
+        });
+      }, 350);
+    } catch {
+      // If browser blocks audio, continue silently.
+    }
+  };
+
+  useEffect(() => {
+    if (isUploading) {
+      wasUploadingRef.current = true;
+      return;
+    }
+
+    if (wasUploadingRef.current && uploadedFromAPI) {
+      playUploadFinishedSound();
+    }
+
+    wasUploadingRef.current = false;
+  }, [isUploading, uploadedFromAPI]);
+
   const handleFilesSelected = async (files: File[]) => {
     if (files.length === 0) return;
 
     setLoading(true);
     setError(null);
+    setUploadedFromAPI(false);
+    setUploadProgress({ uploaded: 0, total: files.length });
+
+    const allNewItems: UploadedClothing[] = [];
+
+    // Step 1: frontend validation — reject invalid files immediately without uploading
+    const validFiles: File[] = [];
+    const fileWarnings: Record<string, string> = {};  // Track validation warnings by fileName
+    const rejectedItems: UploadedClothing[] = [];
+
+    for (const file of files) {
+      const validation = await validateImageFile(file);
+      if (!validation.valid) {
+        const preview = URL.createObjectURL(file);
+        rejectedItems.push({
+          id: crypto.randomUUID(),
+          file,
+          preview,
+          status: "rejected",
+          reject_reason: validation.reject_reason,
+        });
+      } else {
+        validFiles.push(file);
+        if (validation.warning) {
+          fileWarnings[file.name] = validation.warning;
+        }
+      }
+    }
+
+    // Show rejected items immediately
+    if (rejectedItems.length > 0) {
+      allNewItems.push(...rejectedItems);
+      setUploadedClothing((prev) => [...prev, ...rejectedItems]);
+    }
+
+    setUploadProgress({ uploaded: 0, total: validFiles.length });
 
     try {
-      const formData = new FormData();
-      files.forEach((file) => {
-        formData.append("files", file);
-      });
+      let processed = 0;
 
-      const response = await uploadClothingPhase2(formData);
-      const data = response.data;
+      for (let start = 0; start < validFiles.length; start += BATCH_SIZE) {
+        const batch = validFiles.slice(start, start + BATCH_SIZE);
+        const formData = new FormData();
+        batch.forEach((file) => {
+          formData.append("files", file);
+        });
 
-      if (!data.success) {
-        throw new Error(data.message || "Upload failed.");
+        const response = await uploadClothingPhase2(formData);
+        const data = response.data;
+
+        if (!data.success) {
+          throw new Error(data.message || "Upload failed.");
+        }
+
+        const newClothing: UploadedClothing[] = data.items.map(
+          (item: UploadedClothingFromAPI) => ({
+            id: item.id,
+            file: new File([], item.file_path),
+            preview: `${apiUrl}/${item.file_path}`,
+            file_path: item.file_path,
+            analysis_source: item.analysis_source,
+            status: resolveItemStatus(item),
+            review_reason: item.review_reason,
+            review_issue: item.review_issue,
+            reject_reason: item.reject_reason,
+            validation_warning: fileWarnings[item.file_path.split('/').pop() || ''] || undefined,
+            analyzed: {
+              category: normalizeCategoryLabel(item.category),
+              color: item.color,
+              style: item.style,
+              warmth_level: item.warmth_level,
+              weather_suitability: item.weather_suitability,
+              gender: item.gender,
+              notes: item.notes,
+            },
+          })
+        );
+
+        allNewItems.push(...newClothing);
+        setUploadedClothing((prev) => [...prev, ...newClothing]);
+
+        processed = Math.min(validFiles.length, processed + batch.length);
+        setUploadProgress({ uploaded: processed, total: validFiles.length });
       }
 
-      // Convert API response to UploadedClothing format
-      const newClothing: UploadedClothing[] = data.items.map(
-        (item: UploadedClothingFromAPI) => ({
-          id: item.id,
-          file: new File([], item.file_path), // Placeholder file object
-          preview: `${apiUrl}/${item.file_path}`,
-          analysis_source: item.analysis_source,
-          analyzed: {
-            category: item.category,
-            color: item.color,
-            style: item.style,
-            warmth_level: item.warmth_level,
-            weather_suitability: item.weather_suitability,
-            gender: item.gender,
-            notes: item.notes,
-          },
-        })
-      );
-
-      setUploadedClothing((prev) => [...prev, ...newClothing]);
       setUploadedFromAPI(true);
     } catch (err) {
       setError(
@@ -102,13 +243,53 @@ export default function Home() {
       );
     } finally {
       setLoading(false);
+      setUploadProgress({ uploaded: 0, total: 0 });
+    }
+
+    // Background duplicate check — runs after items are already shown
+    // Include existing items so new uploads are compared against the full wardrobe
+    if (allNewItems.length > 0) {
+      try {
+        const newItemIds = new Set(allNewItems.map((i) => i.id));
+
+        // Existing items (before this upload) + new items — backend checks all against each other
+        const existingForCheck = uploadedClothing
+          .filter((item) => item.file_path)
+          .map((item) => ({ id: item.id, file_path: item.file_path! }));
+
+        const newForCheck = allNewItems
+          .filter((item) => item.file_path)
+          .map((item) => ({ id: item.id, file_path: item.file_path! }));
+
+        const allItemsToCheck = [...existingForCheck, ...newForCheck];
+
+        const dupResponse = await checkDuplicatesPhase2(allItemsToCheck);
+        const dupResults: { id: string; is_exact_duplicate: boolean; is_similar_duplicate: boolean }[] =
+          dupResponse.data?.results ?? [];
+
+        // Only apply duplicate flags to the newly uploaded items
+        setUploadedClothing((prev) =>
+          prev.map((item) => {
+            if (!newItemIds.has(item.id)) return item;
+            const result = dupResults.find((r) => r.id === item.id);
+            if (!result) return item;
+            return {
+              ...item,
+              is_exact_duplicate: result.is_exact_duplicate,
+              is_similar_duplicate: result.is_similar_duplicate,
+            };
+          })
+        );
+      } catch {
+        // Duplicate check failing silently — badges simply won't show
+      }
     }
   };
 
   const handleRemoveClothing = (id: string) => {
     setUploadedClothing((prev) =>
       prev.filter((item) => {
-        if (item.id === id) {
+        if (item.id === id && item.preview.startsWith("blob:")) {
           URL.revokeObjectURL(item.preview);
         }
         return item.id !== id;
@@ -116,10 +297,50 @@ export default function Home() {
     );
   };
 
+  const handleReplaceClothing = (id: string, file: File) => {
+    // Remove the old rejected item, then re-upload the new file
+    setUploadedClothing((prev) =>
+      prev.filter((item) => {
+        if (item.id === id && item.preview.startsWith("blob:")) {
+          URL.revokeObjectURL(item.preview);
+        }
+        return item.id !== id;
+      })
+    );
+    handleFilesSelected([file]);
+  };
+
+  const handleClearAllClothing = () => {
+    setUploadedClothing((prev) => {
+      prev.forEach((item) => {
+        if (item.preview.startsWith("blob:")) {
+          URL.revokeObjectURL(item.preview);
+        }
+      });
+      return [];
+    });
+
+    setUploadedFromAPI(false);
+    setRecommendations(null);
+    setWarnings([]);
+    setFeedbackByDay({});
+    setRecommendationCountByDay({});
+    setError(null);
+  };
+
   const handleAnalysisChange = (id: string, analysis: ClothingAnalysis) => {
     setUploadedClothing((prev) =>
       prev.map((item) =>
-        item.id === id ? { ...item, analyzed: analysis } : item
+        item.id === id
+          ? {
+              ...item,
+              analyzed: {
+                ...analysis,
+                category: normalizeCategoryLabel(analysis.category),
+              },
+              status: isNaCategory(analysis.category) ? "needs_review" : "analyzed",
+            }
+          : item
       )
     );
   };
@@ -156,6 +377,30 @@ export default function Home() {
       return;
     }
 
+    const TOPS = ["T-Shirt", "Shirt", "Blouse", "Sweater", "Hoodie", "Jacket", "Coat"];
+    const BOTTOMS = ["Jeans", "Pants", "Shorts", "Skirt"];
+
+    const usableItems = uploadedClothing.filter(
+      (item) => item.status === "analyzed" && !item.is_exact_duplicate && !item.is_similar_duplicate
+    );
+    if (usableItems.length === 0) {
+      setError("Please review at least one item before generating recommendations.");
+      return;
+    }
+
+    const hasTops = usableItems.some(
+      (item) => TOPS.includes(item.analyzed?.category || "") || item.analyzed?.category === "Dress"
+    );
+    const hasBottoms = usableItems.some(
+      (item) => BOTTOMS.includes(item.analyzed?.category || "") || item.analyzed?.category === "Dress"
+    );
+    if (!hasTops || !hasBottoms) {
+      setError(
+        "Your wardrobe needs at least 1 top and 1 bottom (or a dress) to generate outfit recommendations. Please add more items."
+      );
+      return;
+    }
+
     if (!location.trim()) {
       setError("Please enter a location.");
       return;
@@ -171,10 +416,11 @@ export default function Home() {
     setRecommendations(null);
     setWarnings([]);
     setFeedbackByDay({});
+    setRecommendationCountByDay({});
 
     try {
       // Use already analyzed data and weather forecast
-      const clothingAnalyses = uploadedClothing.map((item) => ({
+      const clothingAnalyses = usableItems.map((item) => ({
         category: item.analyzed?.category || "",
         color: item.analyzed?.color || "",
         style: item.analyzed?.style || "",
@@ -193,6 +439,12 @@ export default function Home() {
 
       setRecommendations(recData.recommendations);
       setWarnings(recData.warnings || []);
+      setRecommendationCountByDay(
+        (recData.recommendations || []).reduce<Record<number, number>>((acc, rec) => {
+          acc[rec.day] = 1;
+          return acc;
+        }, {})
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : "An error occurred. Please try again.");
     } finally {
@@ -213,11 +465,32 @@ export default function Home() {
       return;
     }
 
+    const usableItems = uploadedClothing.filter(
+      (item) => item.status === "analyzed" && !item.is_exact_duplicate && !item.is_similar_duplicate
+    );
+    if (usableItems.length === 0) {
+      setError("Please review at least one item before refreshing recommendations.");
+      return;
+    }
+
+    const cooldownUntil = refreshCooldownUntilByDay[day] ?? 0;
+    const now = Date.now();
+    if (cooldownUntil > now) {
+      const waitSeconds = Math.ceil((cooldownUntil - now) / 1000);
+      setError(`Please wait ${waitSeconds}s before refreshing Day ${day} again.`);
+      return;
+    }
+
+    setFeedbackByDay((prev) => ({
+      ...prev,
+      [day]: null,
+    }));
+
     setError(null);
     setRefreshingDay(day);
 
     try {
-      const clothingAnalyses = uploadedClothing.map((item) => ({
+      const clothingAnalyses = usableItems.map((item) => ({
         category: item.analyzed?.category || "",
         color: item.analyzed?.color || "",
         style: item.analyzed?.style || "",
@@ -239,9 +512,27 @@ export default function Home() {
         if (!prev) return prev;
         return prev.map((item) => (item.day === day ? refreshed : item));
       });
+      setRecommendationCountByDay((prev) => ({
+        ...prev,
+        [day]: (prev[day] ?? 1) + 1,
+      }));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to refresh this day.");
     } finally {
+      const cooldownUntil = Date.now() + REFRESH_COOLDOWN_MS;
+      setRefreshCooldownUntilByDay((prev) => ({ ...prev, [day]: cooldownUntil }));
+      window.setTimeout(() => {
+        setRefreshCooldownUntilByDay((prev) => {
+          const current = prev[day];
+          if (!current || current <= Date.now()) {
+            const next = { ...prev };
+            delete next[day];
+            return next;
+          }
+          return prev;
+        });
+      }, REFRESH_COOLDOWN_MS + 100);
+
       setRefreshingDay(null);
     }
   };
@@ -280,7 +571,12 @@ export default function Home() {
       {!hasRecommendations && (
         <div className="space-y-6 sm:space-y-8">
           {/* Upload Area */}
-          <UploadArea onFilesSelected={handleFilesSelected} loading={loading} />
+          <UploadArea
+            onFilesSelected={handleFilesSelected}
+            loading={loading}
+            uploadedCount={uploadProgress.uploaded}
+            totalCount={uploadProgress.total}
+          />
 
           {/* Uploaded Items Review */}
           {!hasUploadedItems && !loading && (
@@ -294,15 +590,18 @@ export default function Home() {
 
           {hasUploadedItems && (
             <div>
-              <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
                 <h2 className="text-xl font-semibold text-slate-900">
                 Your Clothing Items ({uploadedClothing.length})
                 </h2>
-                {uploadedFromAPI && (
-                  <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
-                    Analyzed and ready
-                  </span>
-                )}
+                <button
+                  type="button"
+                  onClick={handleClearAllClothing}
+                  disabled={isUploading}
+                  className="inline-flex items-center gap-1 self-end rounded-xl border border-rose-300 bg-rose-100 px-4 py-2 text-sm text-rose-700 shadow-sm transition hover:bg-rose-200 focus:outline-none focus:ring-2 focus:ring-rose-300 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  🗑 Clear all
+                </button>
               </div>
               <p className="mb-4 text-sm text-slate-600">
                 Review and edit the detected clothing properties below. Click "Edit" to adjust any details.
@@ -314,6 +613,8 @@ export default function Home() {
                     item={item}
                     onAnalysisChange={handleAnalysisChange}
                     onRemove={handleRemoveClothing}
+                    onReplace={handleReplaceClothing}
+                    disabled={isUploading}
                   />
                 ))}
               </div>
@@ -443,22 +744,37 @@ export default function Home() {
           <div className="grid gap-6 md:grid-cols-2">
             {recommendations.map((rec) => (
               <div key={rec.day} className="flex flex-col gap-3">
-                <Phase2RecommendationCard recommendation={rec} wardrobeItems={uploadedClothing} />
-                <div className="flex justify-center">
-                  <button
-                    type="button"
-                    onClick={() => handleRefreshDay(rec.day)}
-                    disabled={refreshingDay === rec.day}
-                    className="rounded-full border border-indigo-200 bg-indigo-50 px-5 py-2 text-sm font-semibold text-indigo-700 transition hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {refreshingDay === rec.day ? "Refreshing..." : "Refresh day"}
-                  </button>
-                </div>
+                <Phase2RecommendationCard
+                  recommendation={rec}
+                  wardrobeItems={uploadedClothing}
+                  recommendationCount={recommendationCountByDay[rec.day] ?? 1}
+                />
                 <Phase2FeedbackButtons
                   onLike={() => handleFeedback(rec.day, "like")}
                   onDislike={() => handleFeedback(rec.day, "dislike")}
                   selectedFeedback={feedbackByDay[rec.day] ?? null}
+                  disabled={isUploading}
                 />
+                {(feedbackByDay[rec.day] === "dislike" || refreshingDay === rec.day) && (
+                  <div className="flex justify-center">
+                    <button
+                      type="button"
+                      onClick={() => handleRefreshDay(rec.day)}
+                      disabled={
+                        isUploading ||
+                        refreshingDay === rec.day ||
+                        (refreshCooldownUntilByDay[rec.day] ?? 0) > Date.now()
+                      }
+                      className="rounded-full border border-indigo-200 bg-indigo-50 px-5 py-2 text-sm font-semibold text-indigo-700 transition hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {refreshingDay === rec.day
+                        ? "Thinking..."
+                        : (refreshCooldownUntilByDay[rec.day] ?? 0) > Date.now()
+                          ? `Cooldown (${Math.ceil(((refreshCooldownUntilByDay[rec.day] ?? 0) - Date.now()) / 1000)}s)`
+                          : "Refresh day"}
+                    </button>
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -471,8 +787,10 @@ export default function Home() {
                 setWarnings([]);
                 setError(null);
                 setFeedbackByDay({});
+                setRecommendationCountByDay({});
               }}
-              className="rounded-full border border-slate-200 bg-slate-100 px-8 py-3 text-sm font-semibold text-slate-900 transition hover:bg-slate-200"
+              disabled={isUploading}
+              className="rounded-full border border-slate-200 bg-slate-100 px-8 py-3 text-sm font-semibold text-slate-900 transition hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-50"
             >
               ← Start Over
             </button>

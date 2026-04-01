@@ -21,9 +21,9 @@ except Exception as e:
 @router.post("/generate", response_model=RecommendationsGenerateResponse)
 def generate_recommendations(request: RecommendationsGenerateRequest):
     """
-    Generate outfit recommendations based on clothing data and weather forecast using rule-based logic.
+    Generate outfit recommendations based on clothing data and weather forecast.
 
-    Final MVP flow: rule-based outfit selection plus viability warnings.
+    Uses AI-first generation per day with automatic fallback to rule-based logic.
     """
     # Validate that service is available
     if not recommendation_service:

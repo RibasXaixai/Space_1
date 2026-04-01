@@ -3,6 +3,18 @@ import type { Recommendation, UploadedClothing } from "../types/phase2";
 interface RecommendationCardProps {
   recommendation: Recommendation;
   wardrobeItems: UploadedClothing[];
+  recommendationCount?: number;
+}
+
+function toOrdinal(value: number): string {
+  const v = Math.abs(value);
+  const mod100 = v % 100;
+  if (mod100 >= 11 && mod100 <= 13) return `${value}th`;
+  const mod10 = v % 10;
+  if (mod10 === 1) return `${value}st`;
+  if (mod10 === 2) return `${value}nd`;
+  if (mod10 === 3) return `${value}rd`;
+  return `${value}th`;
 }
 
 function normalizeLabel(value: string): string {
@@ -40,6 +52,20 @@ function canonicalCategory(value: string): string {
     dresses: "dress",
     skirt: "skirt",
     skirts: "skirt",
+    shoe: "shoes",
+    shoes: "shoes",
+    oxford: "shoes",
+    oxfordshoe: "shoes",
+    loafer: "shoes",
+    loafers: "shoes",
+    sneaker: "shoes",
+    sneakers: "shoes",
+    boot: "shoes",
+    boots: "shoes",
+    sandal: "shoes",
+    sandals: "shoes",
+    heel: "shoes",
+    heels: "shoes",
   };
 
   return aliases[normalized] || normalized;
@@ -71,7 +97,11 @@ function parseWeatherMatch(weatherMatch: string): { condition: string; temp: str
   return { condition, temp };
 }
 
-export default function RecommendationCard({ recommendation, wardrobeItems }: RecommendationCardProps) {
+export default function RecommendationCard({
+  recommendation,
+  wardrobeItems,
+  recommendationCount = 1,
+}: RecommendationCardProps) {
   const daysOfWeek = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
   // Force noon UTC to avoid timezone-offset day shifts
   const date = new Date(recommendation.date + "T12:00:00");
@@ -80,6 +110,7 @@ export default function RecommendationCard({ recommendation, wardrobeItems }: Re
   const confidence = Math.round(recommendation.confidence * 100);
   const { condition, temp } = parseWeatherMatch(recommendation.weather_match);
   const icon = weatherIcon(condition);
+  const recommendationSource = (recommendation.recommendation_source || "rule-based").toLowerCase();
   const usedWardrobeIds = new Set<string>();
 
   const itemVisuals = recommendation.clothing_items.map((label) => {
@@ -122,7 +153,19 @@ export default function RecommendationCard({ recommendation, wardrobeItems }: Re
         </div>
 
         {/* Viability badge */}
-        <div className="mt-3">
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <span className="inline-flex items-center rounded-full bg-white/90 px-3 py-1 text-xs font-bold text-cyan-700">
+            {toOrdinal(recommendationCount)} recommendation
+          </span>
+          <span
+            className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-bold ${
+              recommendationSource === "ai"
+                ? "bg-white/90 text-indigo-700"
+                : "bg-white/90 text-slate-700"
+            }`}
+          >
+            {recommendationSource === "ai" ? "AI Recommendation" : "Rule-based Recommendation"}
+          </span>
           {isViable ? (
             <span className="inline-flex items-center gap-1.5 rounded-full bg-white/90 px-3 py-1 text-xs font-bold text-emerald-700">
               ✅ Outfit ready

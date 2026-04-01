@@ -1,5 +1,13 @@
+import json
+import os
 import random
+import time
 from typing import Optional
+
+try:
+    from openai import OpenAI
+except ImportError:
+    OpenAI = None
 
 from app.schemas.phase2 import ClothingAnalysisSchema, WeatherForecastSchema
 
@@ -15,6 +23,22 @@ class RecommendationService:
     COLD_CONDITIONS = {"snowy", "chilly", "cold", "freezing", "snow", "blizzard", "ice"}
     RAINY_CONDITIONS = {"rainy", "rain", "drizzle", "precipitation", "shower", "storm"}
     COOL_CONDITIONS = {"cloudy", "overcast", "cool", "mild"}
+    AI_RETRY_ATTEMPTS = 3
+    AI_RETRY_BASE_DELAY_SECONDS = 2
+
+    def __init__(self):
+        self.use_ai = False
+        self.ai_client = None
+        self.ai_model = os.getenv("OPENAI_RECOMMENDATION_MODEL", os.getenv("OPENAI_MODEL", "gpt-4o-mini"))
+
+        api_key = os.getenv("OPENAI_API_KEY")
+        if OpenAI is not None and api_key:
+            try:
+                self.ai_client = OpenAI(api_key=api_key)
+                self.use_ai = True
+            except Exception as exc:
+                print(f"Warning: Failed to initialize AI recommendation client: {exc}")
+                self.use_ai = False
 
     def generate_recommendations(
         self,
@@ -83,7 +107,11 @@ class RecommendationService:
         return self._build_outfit_for_day(clothing_items, day_forecast, day)
 
     def _build_outfit_for_day(self, clothing_items: list[dict], day_forecast: dict, day_num: int) -> dict:
-        """Build an outfit and evaluate if it is viable for the day weather."""
+        """Build an outfit (AI-first, rule-based fallback) and evaluate viability."""
+        ai_outfit = self._build_ai_outfit_for_day(clothing_items, day_forecast, day_num)
+        if ai_outfit is not None:
+            return ai_outfit
+
         temp = int(day_forecast.get("temperature", 20))
         condition = str(day_forecast.get("condition", "")).lower()
         humidity = int(day_forecast.get("humidity", 50))
@@ -140,9 +168,145 @@ class RecommendationService:
             "clothing_items": outfit_items,
             "weather_match": f"{condition.title()}, {temp}C",
             "confidence": confidence,
+            "recommendation_source": "rule-based",
             "is_viable": is_viable,
             "day_warning": day_warning,
         }
+
+    def _build_ai_outfit_for_day(self, clothing_items: list[dict], day_forecast: dict, day_num: int) -> Optional[dict]:
+        """Attempt AI recommendation for a single day. Returns None on any failure."""
+        if not self.use_ai or self.ai_client is None:
+            return None
+
+        try:
+            wardrobe_summary = []
+            for item in clothing_items:
+                wardrobe_summary.append(
+                    {
+                        "category": item.get("category", ""),
+                        "color": item.get("color", ""),
+                        "style": item.get("style", ""),
+                        "warmth_level": item.get("warmth_level", ""),
+                        "weather_suitability": item.get("weather_suitability", ""),
+                        "gender": item.get("gender", "Unisex"),
+                    }
+                )
+
+            prompt = {
+                "task": "Generate one outfit recommendation for this day only.",
+                "day": day_num,
+                "date": day_forecast.get("date"),
+                "weather": day_forecast,
+                "wardrobe": wardrobe_summary,
+                "rules": [
+                    "Use only clothing categories that exist in wardrobe.",
+                    "Return a safe option for weather conditions.",
+                    "If no complete outfit is possible, mark is_viable=false and explain briefly.",
+                    "Provide a fresh alternative option when possible.",
+                ],
+                "output_json_schema": {
+                    "outfit_description": "string",
+                    "clothing_items": ["string"],
+                    "weather_match": "string",
+                    "confidence": "number between 0 and 1",
+                    "is_viable": "boolean",
+                    "day_warning": "string or null",
+                },
+            }
+
+            response = None
+            for attempt in range(self.AI_RETRY_ATTEMPTS):
+                try:
+                    response = self.ai_client.chat.completions.create(
+                        model=self.ai_model,
+                        temperature=0.7,
+                        messages=[
+                            {
+                                "role": "system",
+                                "content": "You are a fashion recommendation assistant. Return only valid JSON.",
+                            },
+                            {
+                                "role": "user",
+                                "content": json.dumps(prompt),
+                            },
+                        ],
+                    )
+                    break
+                except Exception as exc:
+                    if self._is_rate_limit_error(exc) and attempt < self.AI_RETRY_ATTEMPTS - 1:
+                        delay = self.AI_RETRY_BASE_DELAY_SECONDS * (attempt + 1)
+                        print(
+                            f"AI recommendation rate-limited (day {day_num}), retrying in {delay}s..."
+                        )
+                        time.sleep(delay)
+                        continue
+                    raise
+
+            if response is None:
+                return None
+
+            raw = (response.choices[0].message.content or "").strip()
+            if raw.startswith("```"):
+                raw = raw.strip("`")
+                if raw.lower().startswith("json"):
+                    raw = raw[4:].strip()
+
+            if "{" in raw and "}" in raw:
+                raw = raw[raw.find("{") : raw.rfind("}") + 1]
+
+            parsed = json.loads(raw)
+
+            outfit_description = str(parsed.get("outfit_description", "")).strip()
+            clothing_items_out = parsed.get("clothing_items", [])
+            if not isinstance(clothing_items_out, list):
+                clothing_items_out = []
+            clothing_items_out = [str(item).strip() for item in clothing_items_out if str(item).strip()]
+            if not clothing_items_out:
+                clothing_items_out = ["No suitable outfit found"]
+
+            weather_match = str(parsed.get("weather_match", "")).strip()
+            if not weather_match:
+                condition = str(day_forecast.get("condition", "")).title()
+                temp = int(day_forecast.get("temperature", 20))
+                weather_match = f"{condition}, {temp}C"
+
+            confidence_raw = parsed.get("confidence", 0.7)
+            try:
+                confidence = float(confidence_raw)
+            except (TypeError, ValueError):
+                confidence = 0.7
+            confidence = min(1.0, max(0.35, confidence))
+
+            is_viable = bool(parsed.get("is_viable", True))
+            day_warning_raw = parsed.get("day_warning")
+            day_warning = str(day_warning_raw).strip() if day_warning_raw else None
+
+            if not outfit_description:
+                outfit_description = "AI generated this recommendation based on your wardrobe and weather."
+
+            return {
+                "day": day_num,
+                "date": day_forecast.get("date"),
+                "outfit_description": outfit_description,
+                "clothing_items": clothing_items_out,
+                "weather_match": weather_match,
+                "confidence": confidence,
+                "recommendation_source": "ai",
+                "is_viable": is_viable,
+                "day_warning": day_warning,
+            }
+        except Exception as exc:
+            print(f"AI recommendation error (day {day_num}): {exc}")
+            return None
+
+    def _is_rate_limit_error(self, exc: Exception) -> bool:
+        error_text = str(exc).lower()
+        return (
+            "429" in error_text
+            or "rate limit" in error_text
+            or "rate_limit" in error_text
+            or "tokens per min" in error_text
+        )
 
     def _evaluate_day_viability(
         self,
@@ -305,6 +469,7 @@ class RecommendationService:
                     "clothing_items": ["No suitable outfit found"],
                     "weather_match": f"{day.condition}, {day.temperature}C",
                     "confidence": 0.35,
+                    "recommendation_source": "rule-based",
                     "is_viable": False,
                     "day_warning": "No wardrobe data available for viability checks.",
                 }

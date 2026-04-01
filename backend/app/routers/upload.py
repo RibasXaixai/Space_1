@@ -1,24 +1,28 @@
 from fastapi import APIRouter, UploadFile, File
 from app.services.file_service import save_uploaded_file
 from app.services.clothing_analysis_service import ClothingAnalysisService
-from app.schemas.upload import ClothingUploadResponse, UploadedClothingItemSchema
+from app.services.duplicate_detection_service import DuplicateDetectionService
+from app.schemas.upload import (
+    ClothingUploadResponse,
+    UploadedClothingItemSchema,
+    CheckDuplicatesRequest,
+    CheckDuplicatesResponse,
+    DuplicateResultItem,
+)
 import uuid
 
 router = APIRouter()
 
-# Initialize analysis service once
+# Initialize services once
 analysis_service = ClothingAnalysisService()
+duplicate_service = DuplicateDetectionService()
 
 
 @router.post("/upload-clothing", response_model=ClothingUploadResponse)
 async def upload_clothing(files: list[UploadFile] = File(...)):
     """
-    Upload multiple clothing images and get analysis for each using OpenAI Vision API.
-    
-    Falls back to mock analysis if OpenAI is unavailable.
-    
-    Returns:
-        ClothingUploadResponse with analyzed clothing items
+    Upload multiple clothing images and get AI analysis for each.
+    Duplicate detection is handled separately via /check-duplicates.
     """
     if not files:
         return ClothingUploadResponse(
@@ -30,25 +34,26 @@ async def upload_clothing(files: list[UploadFile] = File(...)):
     uploaded_items = []
 
     for file in files:
-        # Validate file type
         if not file.content_type or not file.content_type.startswith("image/"):
             continue
 
         try:
-            # Read file content
             content = await file.read()
-
-            # Save file locally
             file_path = save_uploaded_file(content, file.filename or "image.jpg")
 
-            # Analyze clothing using OpenAI (or mock fallback)
             analysis, analysis_source = analysis_service.analyze_clothing_with_source(file_path)
+            status, review_reason, review_issue = analysis_service.get_review_state(analysis, analysis_source)
 
-            # Create response item
+            reject_reason = review_issue if status == "rejected" else None
+
             item = UploadedClothingItemSchema(
                 id=str(uuid.uuid4()),
                 file_path=file_path,
                 analysis_source=analysis_source,
+                status=status,
+                review_reason=review_reason,
+                review_issue=review_issue,
+                reject_reason=reject_reason,
                 category=analysis.category,
                 color=analysis.color,
                 style=analysis.style,
@@ -57,10 +62,8 @@ async def upload_clothing(files: list[UploadFile] = File(...)):
                 gender=analysis.gender,
                 notes=analysis.notes,
             )
-
             uploaded_items.append(item)
         except Exception as e:
-            # Log error but continue processing other files
             print(f"Error processing file {file.filename}: {str(e)}")
             continue
 
@@ -69,3 +72,27 @@ async def upload_clothing(files: list[UploadFile] = File(...)):
         items=uploaded_items,
         message=f"Successfully processed {len(uploaded_items)} clothing item(s).",
     )
+
+
+@router.post("/check-duplicates", response_model=CheckDuplicatesResponse)
+async def check_duplicates(request: CheckDuplicatesRequest):
+    """
+    Check for exact and visually similar duplicates across a list of clothing items.
+    Called after upload so items appear immediately and duplicate badges load separately.
+    """
+    if not request.items:
+        return CheckDuplicatesResponse(success=True, results=[])
+
+    file_paths = [item.file_path for item in request.items]
+    duplicates_info = duplicate_service.check_duplicates_in_batch(file_paths)
+
+    results = [
+        DuplicateResultItem(
+            id=request.items[idx].id,
+            is_exact_duplicate=dup.get("is_exact_duplicate", False),
+            is_similar_duplicate=dup.get("is_similar_duplicate", False),
+        )
+        for idx, dup in duplicates_info.items()
+    ]
+
+    return CheckDuplicatesResponse(success=True, results=results)

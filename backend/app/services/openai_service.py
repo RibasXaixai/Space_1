@@ -1,5 +1,6 @@
 import base64
 import json
+import time
 from pathlib import Path
 from typing import Optional
 import os
@@ -12,6 +13,9 @@ except ImportError:
 
 class OpenAIService:
     """Service for integrating with OpenAI Vision API."""
+
+    AI_RETRY_ATTEMPTS = 3
+    AI_RETRY_BASE_DELAY_SECONDS = 2
 
     def __init__(self):
         api_key = os.getenv("OPENAI_API_KEY")
@@ -58,26 +62,29 @@ class OpenAIService:
             media_type = media_type_map.get(suffix, "image/jpeg")
 
             # Create message with vision
-            response = self.client.chat.completions.create(
-                model=self.model,
-                temperature=0,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "You are a strict clothing image analyzer. Return only valid JSON with the requested keys.",
-                    },
-                    {
-                        "role": "user",
-                        "content": [
+            response = None
+            for attempt in range(self.AI_RETRY_ATTEMPTS):
+                try:
+                    response = self.client.chat.completions.create(
+                        model=self.model,
+                        temperature=0,
+                        messages=[
                             {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:{media_type};base64,{base64_image}"
-                                },
+                                "role": "system",
+                                "content": "You are a strict clothing image analyzer. Return only valid JSON with the requested keys.",
                             },
                             {
-                                "type": "text",
-                                "text": """Analyze the MAIN visible clothing item in this photo and return a JSON object with the following fields:
+                                "role": "user",
+                                "content": [
+                                    {
+                                        "type": "image_url",
+                                        "image_url": {
+                                            "url": f"data:{media_type};base64,{base64_image}"
+                                        },
+                                    },
+                                    {
+                                        "type": "text",
+                                        "text": """Analyze the MAIN visible clothing item in this photo and return a JSON object with the following fields:
 {
     "category": "Type of clothing (e.g., T-Shirt, Jeans, Jacket, Sweater, Dress, etc.)",
     "color": "Primary color of the item",
@@ -85,21 +92,34 @@ class OpenAIService:
     "warmth_level": "How warm the item is (Light, Medium, or Heavy)",
     "weather_suitability": "Best weather for this item (Spring/Summer, Fall/Winter, All-Weather, VariableSeason, or Indoor)",
     "gender": "Target gender style (Male, Female, or Unisex)",
-    "notes": "A brief, helpful note about this clothing item (1-2 sentences)"
+    "notes": "A brief, helpful note about this clothing item (1-2 sentences)",
+    "confidence_score": "Your confidence that this is a valid clothing item on a scale of 0-100 (where 100 is certain, 0 is uncertain or not clothing)"
 }
 
 Rules:
 - Focus only on the garment itself, ignore background and lighting artifacts.
 - If uncertain, choose the closest reasonable clothing value.
+- Provide a confidence_score: Use high values (90+) only when you are very certain the image contains a valid clothing item. Use low values (e.g., 50 or below) if the image shows non-clothing items like body parts, objects, food, etc.
 - Return ONLY valid JSON with double quotes and no markdown.
 - Do not include explanations outside JSON.
 
 Be concise and accurate."""
+                                    }
+                                ],
                             }
                         ],
-                    }
-                ],
-            )
+                    )
+                    break
+                except Exception as e:
+                    if self._is_rate_limit_error(e) and attempt < self.AI_RETRY_ATTEMPTS - 1:
+                        delay = self.AI_RETRY_BASE_DELAY_SECONDS * (attempt + 1)
+                        print(f"OpenAI vision rate-limited, retrying in {delay}s...")
+                        time.sleep(delay)
+                        continue
+                    raise
+
+            if response is None:
+                return None
 
             # Parse response
             response_text = response.choices[0].message.content or ""
@@ -127,3 +147,12 @@ Be concise and accurate."""
         except Exception as e:
             print(f"OpenAI analysis error: {str(e)}")
             return None
+
+    def _is_rate_limit_error(self, error: Exception) -> bool:
+        error_text = str(error).lower()
+        return (
+            "429" in error_text
+            or "rate limit" in error_text
+            or "rate_limit" in error_text
+            or "tokens per min" in error_text
+        )

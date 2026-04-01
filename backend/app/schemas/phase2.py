@@ -10,6 +10,7 @@ class ClothingAnalysisSchema(BaseModel):
     weather_suitability: str
     gender: str = "Unisex"
     notes: str
+    confidence_score: float = 100.0
 
 
 class AnalyzeClothesRequest(BaseModel):
@@ -49,6 +50,7 @@ class RecommendationSchema(BaseModel):
     clothing_items: list[str]
     weather_match: str
     confidence: float
+    recommendation_source: str = "rule-based"
     is_viable: bool = True
     day_warning: Optional[str] = None
 
