@@ -1,234 +1,107 @@
-# Welcome to Your First Coding Project
+# Amazing Wardrobe Planner
 
-This is a simple project to help you get started with Python using your preferred IDE: VSCode, Cursor, or Antigravity.  
-You'll write your very first scripts here, while your AI assistant acts as your tutor and guide.  
-Let's explore this workspace together:
+Amazing Wardrobe Planner is a full-stack app that helps users upload clothes, fetch a 5-day weather forecast, and generate daily outfit recommendations.
 
----
+## Tech Stack
 
-## 📋 Table of Contents
+- Backend: FastAPI, Uvicorn, Python
+- Frontend: React, TypeScript, Vite, Tailwind CSS
+- AI + APIs: OpenAI (image analysis), WeatherAPI (forecast)
 
-1. [Prerequisites](#prerequisites)
-2. [Getting to Know Your IDE](#getting-to-know-your-ide)
-   - [Exploring the Project Files](#exploring-the-project-files)
-   - [How to Run Code](#how-to-run-code)
-   - [Setup](#setup)
-     - [Quick Start: Activate Your Environment](#quick-start-activate-your-environment)
-     - [First Time Setup](#first-time-setup)
-   - [Working with Secrets](#working-with-secrets-api-keys-passwords)
-3. [Your First Challenge: Understanding the Code](#your-first-challenge-understanding-the-code)
+## Project Structure
 
----
+- `backend/app/main.py`: FastAPI entrypoint and active route registration.
+- `backend/app/routers/upload.py`: upload and clothing analysis endpoint.
+- `backend/app/routers/weather_forecast.py`: 5-day weather endpoint.
+- `backend/app/routers/recommendations.py`: recommendation generation endpoint.
+- `frontend/src/pages/Home.tsx`: complete MVP flow UI.
+- `frontend/src/services/phase2.ts`: frontend API integration used by the MVP flow.
 
-## Prerequisites
+## What Is Implemented
 
-Before you start coding, make sure you have these tools installed on your computer:
+- Multi-image clothing upload.
+- Clothing analysis using OpenAI Vision (with fallback behavior when unavailable).
+- Location-based 5-day weather forecast using WeatherAPI.
+- Rule-based outfit recommendations for the next 5 days.
+- Wardrobe viability warnings (cold/rain/hot edge cases).
+- Per-day Like / Don’t like frontend feedback state.
+- Polished responsive UI with loading, empty, and error states.
 
-### 1. Python 3.13+
+## What Is Simplified
 
-Python is the programming language you'll be learning! Let's check if you have it:
+- No user accounts in the active MVP flow.
+- No persistent feedback storage.
+- No database persistence required for the core flow.
+- Recommendation logic is rule-based and intentionally lightweight.
 
-**🪟 Windows:**
+## Required API Keys
 
-```powershell
-python --version
+- `OPENAI_API_KEY`: required for real clothing image analysis.
+- `WEATHER_API_KEY`: required for real weather forecast data.
+
+If either key is missing, related features will return fallback behavior or unavailability errors.
+
+## Environment Setup
+
+Use the templates:
+
+- `backend/.env.example`
+- `frontend/.env.example`
+- `.env.example` (reference copy)
+
+### Backend `.env`
+
+Create `backend/.env`:
+
+```env
+OPENAI_API_KEY=your_openai_api_key
+WEATHER_API_KEY=your_weatherapi_key
+DATABASE_URL=postgresql://user:password@localhost:5432/ai_wardrobe
+SECRET_KEY=change-me
 ```
 
-**🍎 Mac/Linux:**
+`DATABASE_URL` and `SECRET_KEY` are kept for compatibility with non-MVP modules, but not required for the active MVP route flow.
+
+### Frontend `.env`
+
+Create `frontend/.env`:
+
+```env
+VITE_API_URL=http://localhost:8000
+```
+
+## Local Setup
+
+### 1) Backend
 
 ```bash
-python3 --version
+cd backend
+python -m venv .venv
+# Windows: .\.venv\Scripts\activate
+# Mac/Linux: source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-**Don't have Python?** Here's how to install it:
-
-**🪟 Windows:**
-
-- **Easy way:** Open PowerShell and run:
-
-  ```powershell
-  winget install Python.Python.3.13
-  ```
-
-- **Manual way:** Download from [python.org](https://www.python.org/downloads/) and run the installer  
-  ⚠️ **Important:** Check the box "Add Python to PATH" during installation!
-
-**🍎 Mac:**
-
-- **Easy way (using Homebrew):**
-
-  ```bash
-  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-  brew install python3
-  ```
-
-- **Manual way:** Download from [python.org](https://www.python.org/downloads/) and run the installer
-
-### 2. Git
-
-Git helps you save and track changes to your code. Let's check if you have it:
+### 2) Frontend
 
 ```bash
-git --version
+cd frontend
+npm install
+npm run dev
 ```
 
-**Don't have Git?** Here's how to install it:
+Open `http://localhost:5173`.
 
-**🪟 Windows:**
+## API Route Structure (Active MVP)
 
-- **Easy way:** Open PowerShell and run:
+- `GET /health/`
+- `POST /upload-clothing`
+- `POST /weather/forecast`
+- `POST /recommendations/generate`
 
-  ```powershell
-  winget install Git.Git
-  ```
+## Notes For Handoff
 
-- **Manual way:** Download from [git-scm.com](https://git-scm.com/downloads)
-
-**🍎 Mac:**
-
-- **Easy way (using Homebrew):**
-
-  ```bash
-  brew install git
-  ```
-
-- **Manual way:** Download from [git-scm.com](https://git-scm.com/downloads)
-
-### 3. IDE Choice (VSCode, Cursor, or Antigravity)
-
-Choose one of these IDE options:
-
-- [VSCode](https://code.visualstudio.com)
-- [Cursor](https://cursor.sh)
-- [Antigravity](https://antigravity.dev)
-
-> **💡 Note:** This project works with VSCode, Cursor, and Antigravity.
-
-**Need detailed setup help?** Check out the full guides:
-
-- [🪟 Windows Setup Guide](setup_windows.md)
-- [🍎 Mac Setup Guide](setup_mac.md)
-
----
-
-## Getting to Know Your IDE
-
-Your screen has a few key areas:
-
-- **Explorer (Left Side)**: Like a file cabinet — it shows all project files (like `main.py`). Click a file to open it.
-- **Editor (Center)**: Your workbench. This is where you’ll write and edit code.
-- **Terminal (Bottom)**: Your command center. Run commands here to execute your scripts and see results.
-- **AI Chat Panel (Right Side)**: Your AI assistant. You can ask questions about your code, concepts, or next steps.  
-  Remember: the AI will explain logic simply, not overwhelm you with code details.
-
-### Exploring the Project Files
-
-- **`main.py`**: This is the main file where you will write your Python code. For now, this is the only file you need to focus on.
-- **Other Files**: You might see config files like `.cursorrules`, `.github/copilot-instructions.md`, and `.antigravityrules`, plus files like `requirements.txt` and `.vscode`. Don’t worry about these — they exist to make the environment easier and to guide the AI assistant.
-
----
-
-### How to Run Code
-
-Now let’s run the code you just explored:
-
-1. Make sure `main.py` is open in the **Editor**.
-2. Click into the **Terminal** at the bottom.
-3. Run this command:
-
-```bash
-python main.py
-```
-
-1. You should see this message appear in the terminal:
-
-```sh
-Hello, world!
-```
-
-🎉 Congrats, you just ran your first Python program in your IDE!
-
----
-
-### Setup
-
-**Good news!** A Python environment is already prepared for you. 🎉  
-
-When you open a terminal, you might see `(.venv)` at the start of the prompt, like this:
-
-```sh
-(.venv) vibecoding-02-03-68307615:$
-```
-
-This means your environment is ready! If you see this, skip to [Your First Challenge](#your-first-challenge-understanding-the-code).
-
----
-
-#### Quick Start: Activate Your Environment
-
-If you don't see `(.venv)` in your terminal, run this commands:
-
-**🪟 Windows:**
-
-```powershell
-.\.venv\Scripts\Activate.ps1
-```
-
-**🍎 Mac/Linux:**
-
-```bash
-source .venv/bin/activate
-```
-
----
-
-#### First Time Setup
-
-Need to create your environment from scratch? Follow the full setup guide for your system:
-
-- **[🪟 Windows Setup Guide](setup_windows.md)** - Complete instructions including Python installation
-- **[🍎 Mac Setup Guide](setup_mac.md)** - Complete instructions including Python installation
-
----
-
-### Working with Secrets (API Keys, Passwords)
-
-**Important:** Never put passwords or API keys directly in your code!
-
-#### Using a `.env` File
-
-When you need to store secrets (like API keys), create a file named `.env` in your project folder:
-
-1. Right-click in the Explorer → New File → Name it `.env`
-2. Add your secrets, one per line:
-
-   ```sh
-   API_KEY=your_secret_key_here
-   PASSWORD=your_password_here
-   ```
-
-3. Ask your AI assistant: **"Use my API key from the .env file"**
-
-Your AI assistant will help you load and use these secrets properly in your code.
-
-> **💡 Tip:** Your `.env` file is already protected by `.gitignore`, so it won't be uploaded to GitHub. Your secrets stay private!
-
-#### ⚠️ Important Rules
-
-- **Never** write secrets directly in your code
-- **Always** use a `.env` file for passwords, API keys, and tokens
-- **Ask your AI assistant** to help you use environment variables when you need them
-
----
-
-## Your First Challenge: Understanding the Code
-
-Before running anything, let’s ask your AI assistant what the code means.
-
-In the **AI Chat panel**, on the right side, type:
-
-```text
-Can you explain what the code in `main.py` does?
-```
-
-You’ll get a simple, logical explanation of what the program does, not just a code breakdown.
+- Backend now loads environment variables from `backend/.env` at startup.
+- Frontend MVP API calls are centralized in `frontend/src/services/phase2.ts` for consistency.
+- Legacy/non-MVP modules may remain in the repository but are not part of the active handoff flow.

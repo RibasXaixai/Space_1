@@ -1,0 +1,10 @@
+fastapi==0.111.1
+uvicorn[standard]==0.23.2
+python-dotenv==1.0.0
+pydantic==2.9.0
+SQLAlchemy==2.0.35
+psycopg2-binary==2.9.7
+passlib[bcrypt]==1.7.4
+python-jose[cryptography]==3.3.0
+openai>=1.10.0
+requests==2.31.0

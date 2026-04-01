@@ -44,6 +44,14 @@ wheels/
 *.swo
 *~
 
+# Node / Frontend
+node_modules/
+frontend/node_modules/
+frontend/dist/
+
+# Runtime uploads
+backend/uploads/
+
 # OS
 .DS_Store
 Thumbs.db
