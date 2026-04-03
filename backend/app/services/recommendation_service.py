@@ -69,7 +69,8 @@ class RecommendationService:
             warnings.append("No reviewed clothing items are available for recommendations yet.")
             return self._generate_minimal_recommendations(weather_forecast, warnings)
 
-        warnings.extend(self._build_variety_warnings(clothing_items))
+        warnings.extend(self._build_variety_warnings(clothing_items, forecast_days))
+        warnings.extend(self._build_weather_gap_warnings(clothing_items, forecast_days))
 
         for day_idx, day_forecast in enumerate(forecast_days[:5], start=1):
             outfit = self._build_outfit_for_day(clothing_items, day_forecast, day_idx, history)
@@ -233,19 +234,108 @@ class RecommendationService:
             "day_warning": best_option["day_warning"],
         }
 
-    def _build_variety_warnings(self, clothing_items: list[dict]) -> list[str]:
+    def _build_variety_warnings(self, clothing_items: list[dict], forecast_days: list[dict]) -> list[str]:
         warnings: list[str] = []
         top_count = len({str(item.get("category", "")).lower() for item in clothing_items if self._categorize_clothing(item) == "top"})
         bottom_count = len({str(item.get("category", "")).lower() for item in clothing_items if self._categorize_clothing(item) == "bottom"})
+        plan_days = min(5, len(forecast_days))
 
         if top_count < 2:
-            warnings.append("Limited top variety may cause repeated tops across the 5-day plan.")
+            warnings.append("Limited top variety may cause repeated tops across the 5-day plan. Add at least one more top for better rotation.")
         if bottom_count < 2:
-            warnings.append("Limited bottom variety may cause repeated bottoms across the 5-day plan.")
+            warnings.append("Limited bottom variety may cause repeated bottoms across the 5-day plan. Add at least one more bottom for better rotation.")
         if top_count + bottom_count < 4:
             warnings.append("Wardrobe variety is limited, so some repetition may still be necessary.")
 
+        if top_count < plan_days:
+            warnings.append(
+                f"You currently have {top_count} top option(s) for {plan_days} forecast day(s), so repeats may still be needed."
+            )
+        if bottom_count < plan_days:
+            warnings.append(
+                f"You currently have {bottom_count} bottom option(s) for {plan_days} forecast day(s), so repeats may still be needed."
+            )
+
         return warnings
+
+    def _build_weather_gap_warnings(self, clothing_items: list[dict], forecast_days: list[dict]) -> list[str]:
+        warnings: list[str] = []
+        rainy_days = [day.get("day") for day in forecast_days if self._is_rainy(str(day.get("condition", "")).lower())]
+        cold_days = [day.get("day") for day in forecast_days if self._is_very_cold_or_snow(int(day.get("temperature", 20)), str(day.get("condition", "")).lower())]
+        hot_days = [day.get("day") for day in forecast_days if int(day.get("temperature", 20)) >= 28]
+
+        has_warm_outerwear = any(
+            self._categorize_clothing(item) == "outerwear"
+            and self._normalize_warmth_level(item.get("warmth_level", "medium")) in {"warm", "moderate"}
+            for item in clothing_items
+        )
+        has_boots = any("boot" in str(item.get("category", "")).lower() for item in clothing_items)
+        has_rain_outerwear = any(
+            self._categorize_clothing(item) == "outerwear"
+            and self._weather_suitability_matches(
+                str(item.get("weather_suitability", "")),
+                "rain",
+                12,
+            )
+            for item in clothing_items
+        )
+        has_weather_ready_shoes = any(
+            self._categorize_clothing(item) == "shoes"
+            and (
+                self._weather_suitability_matches(str(item.get("weather_suitability", "")), "rain", 12)
+                or any(token in str(item.get("category", "")).lower() for token in ["boot", "shoe", "sneaker"])
+            )
+            for item in clothing_items
+        )
+        has_light_options = any(
+            self._categorize_clothing(item) == "top"
+            and self._normalize_warmth_level(item.get("warmth_level", "medium")) == "light"
+            for item in clothing_items
+        )
+
+        if rainy_days and (not has_rain_outerwear or not has_weather_ready_shoes):
+            missing_items: list[str] = []
+            if not has_rain_outerwear:
+                missing_items.append("a rain jacket or coat")
+            if not has_weather_ready_shoes:
+                missing_items.append("weather-ready shoes or boots")
+            warnings.append(
+                f"Rain is expected on {self._format_day_list(rainy_days)}. Consider adding {self._join_with_and(missing_items)}."
+            )
+
+        if cold_days and (not has_warm_outerwear or not has_boots):
+            missing_items = []
+            if not has_warm_outerwear:
+                missing_items.append("a warmer coat or jacket")
+            if not has_boots:
+                missing_items.append("boots for colder days")
+            warnings.append(
+                f"Cold-weather coverage is limited for {self._format_day_list(cold_days)}. Consider adding {self._join_with_and(missing_items)}."
+            )
+
+        if hot_days and not has_light_options:
+            warnings.append(
+                f"Warm-weather coverage is limited for {self._format_day_list(hot_days)}. Consider adding lighter tops or breathable outfits."
+            )
+
+        return warnings
+
+    def _format_day_list(self, days: list[Optional[int]]) -> str:
+        valid_days = [f"Day {day}" for day in days if day is not None]
+        if not valid_days:
+            return "the coming days"
+        if len(valid_days) == 1:
+            return valid_days[0]
+        if len(valid_days) == 2:
+            return f"{valid_days[0]} and {valid_days[1]}"
+        return ", ".join(valid_days[:-1]) + f", and {valid_days[-1]}"
+
+    def _join_with_and(self, parts: list[str]) -> str:
+        if not parts:
+            return "additional wardrobe coverage"
+        if len(parts) == 1:
+            return parts[0]
+        return ", ".join(parts[:-1]) + f" and {parts[-1]}"
 
     def _get_candidates_for_role(self, clothing_items: list[dict], role: str, warmth_need: str) -> list[dict]:
         candidates: list[dict] = []
