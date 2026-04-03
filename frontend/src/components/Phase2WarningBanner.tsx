@@ -8,8 +8,34 @@ type WarningMeta = {
   title: string;
   accentClass: string;
   chipLabel?: string;
-  suggestions: string[];
 };
+
+type ShopLink = {
+  label: string;
+  site: string;
+  url: string;
+};
+
+function buildShopLinks(query: string): ShopLink[] {
+  const encoded = encodeURIComponent(query);
+  return [
+    {
+      label: "Browse ASOS",
+      site: "ASOS",
+      url: `https://www.asos.com/search/?q=${encoded}`,
+    },
+    {
+      label: "Browse H&M",
+      site: "H&M",
+      url: `https://www2.hm.com/en_us/search-results.html?q=${encoded}`,
+    },
+    {
+      label: "Browse Zara",
+      site: "Zara",
+      url: `https://www.zara.com/us/en/search?searchTerm=${encoded}`,
+    },
+  ];
+}
 
 function getWarningMeta(warning: string): WarningMeta {
   const normalized = warning.toLowerCase();
@@ -20,7 +46,6 @@ function getWarningMeta(warning: string): WarningMeta {
       title: "Rain coverage needed",
       accentClass: "border-sky-200 bg-sky-50 text-sky-900",
       chipLabel: "Weather gap",
-      suggestions: ["Add a rain jacket", "Add weather-ready shoes"],
     };
   }
 
@@ -30,7 +55,6 @@ function getWarningMeta(warning: string): WarningMeta {
       title: "Cold-weather gap",
       accentClass: "border-indigo-200 bg-indigo-50 text-indigo-900",
       chipLabel: "Warmth needed",
-      suggestions: ["Add a warmer coat", "Add boots"],
     };
   }
 
@@ -40,7 +64,6 @@ function getWarningMeta(warning: string): WarningMeta {
       title: "Top rotation is limited",
       accentClass: "border-violet-200 bg-violet-50 text-violet-900",
       chipLabel: "Variety",
-      suggestions: ["Add more tops"],
     };
   }
 
@@ -50,7 +73,6 @@ function getWarningMeta(warning: string): WarningMeta {
       title: "Bottom rotation is limited",
       accentClass: "border-fuchsia-200 bg-fuchsia-50 text-fuchsia-900",
       chipLabel: "Variety",
-      suggestions: ["Add more bottoms"],
     };
   }
 
@@ -60,7 +82,6 @@ function getWarningMeta(warning: string): WarningMeta {
       title: "Forecast risk detected",
       accentClass: "border-amber-200 bg-amber-50 text-amber-900",
       chipLabel: "Heads up",
-      suggestions: ["Review the flagged days"],
     };
   }
 
@@ -69,18 +90,44 @@ function getWarningMeta(warning: string): WarningMeta {
     title: "Wardrobe tip",
     accentClass: "border-slate-200 bg-slate-50 text-slate-900",
     chipLabel: "Suggestion",
-    suggestions: [],
   };
 }
 
-function getQuickActions(warnings: string[]): string[] {
-  const actions = new Set<string>();
+function getShoppingLinksForWarnings(warnings: string[]): { heading: string; links: ShopLink[] } | null {
+  const allText = warnings.join(" ").toLowerCase();
 
-  warnings.forEach((warning) => {
-    getWarningMeta(warning).suggestions.forEach((suggestion) => actions.add(suggestion));
-  });
+  if (allText.includes("rain")) {
+    return {
+      heading: "Need rain-ready pieces? These links open rain jackets and waterproof layers.",
+      links: buildShopLinks("rain jacket waterproof coat"),
+    };
+  }
 
-  return Array.from(actions);
+  if (allText.includes("cold") || allText.includes("boots") || allText.includes("warmer coat")) {
+    return {
+      heading: "Need warmer coverage? These links open coats and boots for colder days.",
+      links: buildShopLinks("winter coat boots"),
+    };
+  }
+
+  if (allText.includes("bottom variety") || allText.includes("bottom option")) {
+    return {
+      heading: "Need more bottoms? These links open pants, jeans, and similar options.",
+      links: buildShopLinks("pants jeans bottoms"),
+    };
+  }
+
+  if (allText.includes("top variety") || allText.includes("top option")) {
+    return {
+      heading: "Need more tops? These links open shirts, tops, and sweaters.",
+      links: buildShopLinks("tops shirts sweaters"),
+    };
+  }
+
+  return {
+    heading: "Want to expand your wardrobe? These links open general wardrobe essentials.",
+    links: buildShopLinks("wardrobe essentials basics"),
+  };
 }
 
 export default function WarningBanner({ warnings, visible }: WarningBannerProps) {
@@ -88,7 +135,7 @@ export default function WarningBanner({ warnings, visible }: WarningBannerProps)
     return null;
   }
 
-  const quickActions = getQuickActions(warnings);
+  const shoppingLinks = getShoppingLinksForWarnings(warnings);
 
   return (
     <div className="rounded-3xl border border-amber-300 bg-gradient-to-r from-amber-50 to-orange-50 p-6 shadow-sm">
@@ -108,17 +155,27 @@ export default function WarningBanner({ warnings, visible }: WarningBannerProps)
           </div>
         </div>
 
-        {quickActions.length > 0 && (
+        {shoppingLinks && (
           <div className="rounded-2xl border border-amber-200 bg-white/70 p-4">
-            <p className="text-xs font-bold uppercase tracking-widest text-amber-800">Suggested next steps</p>
-            <div className="mt-3 flex flex-wrap gap-2">
-              {quickActions.map((action) => (
-                <span
-                  key={action}
-                  className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-800"
+            <p className="text-xs font-bold uppercase tracking-widest text-amber-800">Helpful shopping links</p>
+            <p className="mt-1 text-sm text-amber-900/80">{shoppingLinks.heading}</p>
+            <div className="mt-3 grid gap-2 sm:grid-cols-3">
+              {shoppingLinks.links.map((link) => (
+                <a
+                  key={link.url}
+                  href={link.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="group rounded-2xl border border-emerald-200 bg-emerald-50 px-3 py-3 text-left transition hover:border-emerald-300 hover:bg-emerald-100"
                 >
-                  + {action}
-                </span>
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <p className="text-sm font-bold text-emerald-900">{link.site}</p>
+                      <p className="mt-1 text-xs text-emerald-800">{link.label}</p>
+                    </div>
+                    <span className="text-sm text-emerald-700 transition group-hover:translate-x-0.5">↗</span>
+                  </div>
+                </a>
               ))}
             </div>
           </div>
