@@ -3,6 +3,8 @@ from typing import Optional
 
 
 class ClothingAnalysisSchema(BaseModel):
+    item_id: Optional[str] = None
+    status: str = "analyzed"
     category: str
     color: str
     style: str

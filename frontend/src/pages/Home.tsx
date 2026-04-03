@@ -421,6 +421,8 @@ export default function Home() {
     try {
       // Use already analyzed data and weather forecast
       const clothingAnalyses = usableItems.map((item) => ({
+        item_id: item.id,
+        status: item.status || "analyzed",
         category: item.analyzed?.category || "",
         color: item.analyzed?.color || "",
         style: item.analyzed?.style || "",
@@ -491,6 +493,8 @@ export default function Home() {
 
     try {
       const clothingAnalyses = usableItems.map((item) => ({
+        item_id: item.id,
+        status: item.status || "analyzed",
         category: item.analyzed?.category || "",
         color: item.analyzed?.color || "",
         style: item.analyzed?.style || "",

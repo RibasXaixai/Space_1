@@ -59,12 +59,22 @@ class RecommendationService:
             warnings.append("No weather forecast available. Using default recommendations.")
             return self._generate_minimal_recommendations(weather_forecast, warnings)
 
-        clothing_items = [item.model_dump() for item in clothing_data]
+        clothing_items = [
+            item.model_dump() for item in clothing_data if getattr(item, "status", "analyzed") == "analyzed"
+        ]
         forecast_days = [day.model_dump() for day in weather_forecast]
+        history: list[dict] = []
+
+        if not clothing_items:
+            warnings.append("No reviewed clothing items are available for recommendations yet.")
+            return self._generate_minimal_recommendations(weather_forecast, warnings)
+
+        warnings.extend(self._build_variety_warnings(clothing_items))
 
         for day_idx, day_forecast in enumerate(forecast_days[:5], start=1):
-            outfit = self._build_outfit_for_day(clothing_items, day_forecast, day_idx)
+            outfit = self._build_outfit_for_day(clothing_items, day_forecast, day_idx, history)
             recommendations.append(outfit)
+            history.append(outfit)
             if not outfit["is_viable"]:
                 affected_days.append(day_idx)
 
@@ -102,78 +112,295 @@ class RecommendationService:
         if not weather_forecast or day > len(weather_forecast):
             raise ValueError("Requested day is outside available weather forecast")
 
-        clothing_items = [item.model_dump() for item in clothing_data]
-        day_forecast = weather_forecast[day - 1].model_dump()
-        return self._build_outfit_for_day(clothing_items, day_forecast, day)
+        clothing_items = [
+            item.model_dump() for item in clothing_data if getattr(item, "status", "analyzed") == "analyzed"
+        ]
+        if not clothing_items:
+            raise ValueError("No reviewed clothing items are available for this refresh")
 
-    def _build_outfit_for_day(self, clothing_items: list[dict], day_forecast: dict, day_num: int) -> dict:
+        history: list[dict] = []
+
+        for previous_day in range(1, day):
+            previous_forecast = weather_forecast[previous_day - 1].model_dump()
+            prior_outfit = self._build_outfit_for_day(clothing_items, previous_forecast, previous_day, history)
+            history.append(prior_outfit)
+
+        day_forecast = weather_forecast[day - 1].model_dump()
+        return self._build_outfit_for_day(clothing_items, day_forecast, day, history)
+
+    def _build_outfit_for_day(
+        self,
+        clothing_items: list[dict],
+        day_forecast: dict,
+        day_num: int,
+        history: Optional[list[dict]] = None,
+    ) -> dict:
         """Build an outfit (AI-first, rule-based fallback) and evaluate viability."""
-        ai_outfit = self._build_ai_outfit_for_day(clothing_items, day_forecast, day_num)
-        if ai_outfit is not None:
+        history = history or []
+        ai_outfit = self._build_ai_outfit_for_day(clothing_items, day_forecast, day_num, history)
+        if ai_outfit is not None and not self._violates_rotation_rules(ai_outfit.get("clothing_items", []), history):
             return ai_outfit
 
         temp = int(day_forecast.get("temperature", 20))
         condition = str(day_forecast.get("condition", "")).lower()
         humidity = int(day_forecast.get("humidity", 50))
-
         warmth_need = self._determine_warmth_need(temp, condition)
 
-        top = self._select_clothing_by_role(clothing_items, "top", warmth_need, condition)
-        bottom = self._select_clothing_by_role(clothing_items, "bottom", warmth_need, condition)
+        top_candidates = self._get_candidates_for_role(clothing_items, "top", warmth_need)
+        bottom_candidates = self._get_candidates_for_role(clothing_items, "bottom", warmth_need)
+        outerwear_candidates = self._get_candidates_for_role(clothing_items, "outerwear", warmth_need)
+        shoe_candidates = self._get_candidates_for_role(clothing_items, "shoes", warmth_need)
 
+        best_option: Optional[dict] = None
         needs_outerwear = self._is_cold_or_rainy(temp, condition)
-        outerwear = None
-        if needs_outerwear:
-            outerwear = self._select_clothing_by_role(clothing_items, "outerwear", warmth_need, condition)
+        outerwear_options = outerwear_candidates if needs_outerwear and outerwear_candidates else [None]
+        if not needs_outerwear:
+            outerwear_options = [None] + outerwear_candidates[:2]
+        shoe_options = shoe_candidates if shoe_candidates else [None]
 
-        shoes = self._select_clothing_by_role(clothing_items, "shoes", warmth_need, condition)
+        for top in top_candidates or [None]:
+            for bottom in bottom_candidates or [None]:
+                for outerwear in outerwear_options:
+                    for shoes in shoe_options:
+                        selected_items = [item for item in [top, bottom, outerwear, shoes] if item]
+                        outfit_items = [str(item.get("category", "")).title() for item in selected_items if item.get("category")]
+                        if not outfit_items:
+                            outfit_items = ["No suitable outfit found"]
 
-        outfit_items = []
-        if top:
-            outfit_items.append(top["category"].title())
-        if bottom:
-            outfit_items.append(bottom["category"].title())
-        if outerwear:
-            outfit_items.append(outerwear["category"].title())
-        if shoes:
-            outfit_items.append(shoes["category"].title())
-        if not outfit_items:
-            outfit_items = ["No suitable outfit found"]
+                        is_viable, day_warning = self._evaluate_day_viability(
+                            temp=temp,
+                            condition=condition,
+                            top=top,
+                            bottom=bottom,
+                            outerwear=outerwear,
+                            shoes=shoes,
+                            selected_items=selected_items,
+                        )
 
-        is_viable, day_warning = self._evaluate_day_viability(
-            temp=temp,
-            condition=condition,
-            top=top,
-            bottom=bottom,
-            outerwear=outerwear,
-            shoes=shoes,
-            selected_items=[item for item in [top, bottom, outerwear, shoes] if item],
-        )
+                        score = self._score_outfit(
+                            selected_items=selected_items,
+                            outfit_items=outfit_items,
+                            warmth_need=warmth_need,
+                            temp=temp,
+                            condition=condition,
+                            is_viable=is_viable,
+                            history=history,
+                        )
+
+                        candidate = {
+                            "top": top,
+                            "bottom": bottom,
+                            "outerwear": outerwear,
+                            "shoes": shoes,
+                            "selected_items": selected_items,
+                            "outfit_items": outfit_items,
+                            "is_viable": is_viable,
+                            "day_warning": day_warning,
+                            "score": score,
+                        }
+
+                        if best_option is None or candidate["score"] > best_option["score"]:
+                            best_option = candidate
+
+        if best_option is None:
+            best_option = {
+                "selected_items": [],
+                "outfit_items": ["No suitable outfit found"],
+                "is_viable": False,
+                "day_warning": "No suitable outfit could be assembled from the current wardrobe.",
+            }
 
         explanation = self._generate_explanation(
-            outfit_items=outfit_items,
+            outfit_items=best_option["outfit_items"],
             temp=temp,
             condition=condition,
             humidity=humidity,
-            is_viable=is_viable,
-            day_warning=day_warning,
+            is_viable=best_option["is_viable"],
+            day_warning=best_option["day_warning"],
         )
 
-        confidence = self._calculate_confidence(outfit_items, is_viable)
+        confidence = self._calculate_confidence(best_option["outfit_items"], best_option["is_viable"])
 
         return {
             "day": day_num,
             "date": day_forecast.get("date"),
             "outfit_description": explanation,
-            "clothing_items": outfit_items,
+            "clothing_items": best_option["outfit_items"],
             "weather_match": f"{condition.title()}, {temp}C",
             "confidence": confidence,
             "recommendation_source": "rule-based",
-            "is_viable": is_viable,
-            "day_warning": day_warning,
+            "is_viable": best_option["is_viable"],
+            "day_warning": best_option["day_warning"],
         }
 
-    def _build_ai_outfit_for_day(self, clothing_items: list[dict], day_forecast: dict, day_num: int) -> Optional[dict]:
+    def _build_variety_warnings(self, clothing_items: list[dict]) -> list[str]:
+        warnings: list[str] = []
+        top_count = len({str(item.get("category", "")).lower() for item in clothing_items if self._categorize_clothing(item) == "top"})
+        bottom_count = len({str(item.get("category", "")).lower() for item in clothing_items if self._categorize_clothing(item) == "bottom"})
+
+        if top_count < 2:
+            warnings.append("Limited top variety may cause repeated tops across the 5-day plan.")
+        if bottom_count < 2:
+            warnings.append("Limited bottom variety may cause repeated bottoms across the 5-day plan.")
+        if top_count + bottom_count < 4:
+            warnings.append("Wardrobe variety is limited, so some repetition may still be necessary.")
+
+        return warnings
+
+    def _get_candidates_for_role(self, clothing_items: list[dict], role: str, warmth_need: str) -> list[dict]:
+        candidates: list[dict] = []
+
+        for item in clothing_items:
+            if self._categorize_clothing(item) != role:
+                continue
+
+            item_warmth = self._normalize_warmth_level(item.get("warmth_level", "medium"))
+            if warmth_need == "warm" and item_warmth == "light":
+                continue
+            if warmth_need == "light" and item_warmth == "warm":
+                continue
+
+            candidates.append(item)
+
+        random.shuffle(candidates)
+        return candidates
+
+    def _score_outfit(
+        self,
+        selected_items: list[dict],
+        outfit_items: list[str],
+        warmth_need: str,
+        temp: int,
+        condition: str,
+        is_viable: bool,
+        history: list[dict],
+    ) -> float:
+        score = 100.0 if is_viable else 35.0
+
+        if selected_items:
+            score += min(12, len(selected_items) * 3)
+
+        for item in selected_items:
+            item_warmth = self._normalize_warmth_level(item.get("warmth_level", "medium"))
+            suitability = str(item.get("weather_suitability", "")).lower()
+
+            if item_warmth == warmth_need:
+                score += 6
+            elif warmth_need == "warm" and item_warmth == "moderate":
+                score += 4
+            elif warmth_need == "light" and item_warmth == "moderate":
+                score += 3
+            else:
+                score -= 2
+
+            if self._weather_suitability_matches(suitability, condition, temp):
+                score += 4
+
+        score -= self._rotation_penalty(outfit_items, history)
+        return score + random.uniform(0.0, 0.25)
+
+    def _rotation_penalty(self, outfit_items: list[str], history: list[dict]) -> float:
+        if not history:
+            return 0.0
+
+        penalty = 0.0
+        current_signature = self._build_outfit_signature(outfit_items)
+        previous_signature = self._build_outfit_signature(history[-1].get("clothing_items", []))
+        if current_signature == previous_signature:
+            penalty += 45.0
+
+        current_top = self._extract_role_label(outfit_items, "top")
+        current_bottom = self._extract_role_label(outfit_items, "bottom")
+        recent_tops = [self._extract_role_label(day.get("clothing_items", []), "top") for day in history[-2:]]
+        recent_bottoms = [self._extract_role_label(day.get("clothing_items", []), "bottom") for day in history[-2:]]
+
+        if current_top and recent_tops and recent_tops[-1] == current_top:
+            penalty += 12.0
+        if current_bottom and recent_bottoms and recent_bottoms[-1] == current_bottom:
+            penalty += 12.0
+
+        if current_top and len(recent_tops) >= 2 and recent_tops[-1] == current_top and recent_tops[-2] == current_top:
+            penalty += 80.0
+        if current_bottom and len(recent_bottoms) >= 2 and recent_bottoms[-1] == current_bottom and recent_bottoms[-2] == current_bottom:
+            penalty += 80.0
+
+        return penalty
+
+    def _violates_rotation_rules(self, outfit_items: list[str], history: list[dict]) -> bool:
+        if not history:
+            return False
+
+        current_signature = self._build_outfit_signature(outfit_items)
+        previous_signature = self._build_outfit_signature(history[-1].get("clothing_items", []))
+        if current_signature == previous_signature:
+            return True
+
+        current_top = self._extract_role_label(outfit_items, "top")
+        current_bottom = self._extract_role_label(outfit_items, "bottom")
+        recent_tops = [self._extract_role_label(day.get("clothing_items", []), "top") for day in history[-2:]]
+        recent_bottoms = [self._extract_role_label(day.get("clothing_items", []), "bottom") for day in history[-2:]]
+
+        if current_top and len(recent_tops) >= 2 and recent_tops[-1] == current_top and recent_tops[-2] == current_top:
+            return True
+        if current_bottom and len(recent_bottoms) >= 2 and recent_bottoms[-1] == current_bottom and recent_bottoms[-2] == current_bottom:
+            return True
+
+        return False
+
+    def _canonical_item_label(self, label: str) -> str:
+        normalized = str(label).strip().lower()
+        keyword_map = [
+            ("t-shirt", "t-shirt"),
+            ("tee", "t-shirt"),
+            ("shirt", "shirt"),
+            ("blouse", "shirt"),
+            ("sweater", "sweater"),
+            ("hoodie", "hoodie"),
+            ("jacket", "jacket"),
+            ("coat", "jacket"),
+            ("cardigan", "jacket"),
+            ("blazer", "jacket"),
+            ("parka", "jacket"),
+            ("raincoat", "jacket"),
+            ("jeans", "jeans"),
+            ("trouser", "pants"),
+            ("pants", "pants"),
+            ("shorts", "shorts"),
+            ("skirt", "skirt"),
+            ("dress", "dress"),
+            ("boots", "boots"),
+            ("boot", "boots"),
+            ("sneakers", "sneakers"),
+            ("sneaker", "sneakers"),
+            ("sandals", "sandals"),
+            ("sandal", "sandals"),
+            ("shoes", "shoes"),
+            ("shoe", "shoes"),
+        ]
+
+        for keyword, canonical in keyword_map:
+            if keyword in normalized:
+                return canonical
+
+        return normalized
+
+    def _extract_role_label(self, clothing_items: list[str], role: str) -> Optional[str]:
+        for label in clothing_items:
+            if self._categorize_clothing({"category": label}) == role:
+                return self._canonical_item_label(label)
+        return None
+
+    def _build_outfit_signature(self, clothing_items: list[str]) -> tuple[str, ...]:
+        normalized = [self._canonical_item_label(item) for item in clothing_items if str(item).strip()]
+        return tuple(sorted(normalized))
+
+    def _build_ai_outfit_for_day(
+        self,
+        clothing_items: list[dict],
+        day_forecast: dict,
+        day_num: int,
+        history: Optional[list[dict]] = None,
+    ) -> Optional[dict]:
         """Attempt AI recommendation for a single day. Returns None on any failure."""
         if not self.use_ai or self.ai_client is None:
             return None
@@ -198,9 +425,19 @@ class RecommendationService:
                 "date": day_forecast.get("date"),
                 "weather": day_forecast,
                 "wardrobe": wardrobe_summary,
+                "recent_days": [
+                    {
+                        "day": previous.get("day"),
+                        "clothing_items": previous.get("clothing_items", []),
+                    }
+                    for previous in (history or [])[-2:]
+                ],
                 "rules": [
                     "Use only clothing categories that exist in wardrobe.",
                     "Return a safe option for weather conditions.",
+                    "Weather suitability is more important than variety.",
+                    "Avoid repeating the exact same full outfit as the previous day.",
+                    "Avoid using the same top or bottom for a third consecutive day unless the wardrobe is too limited.",
                     "If no complete outfit is possible, mark is_viable=false and explain briefly.",
                     "Provide a fresh alternative option when possible.",
                 ],
@@ -324,7 +561,7 @@ class RecommendationService:
 
         if self._is_very_cold_or_snow(temp, condition):
             has_warm_layer = any(
-                str(item.get("warmth_level", "")).lower() in {"warm", "moderate"}
+                self._normalize_warmth_level(item.get("warmth_level", "")) in {"warm", "moderate"}
                 for item in selected_items
             )
             has_boots = shoes is not None and "boot" in str(shoes.get("category", "")).lower()
@@ -332,17 +569,20 @@ class RecommendationService:
                 return False, "Very cold or snowy day needs coat/warm layers/boots, but wardrobe is missing one or more."
 
         if self._is_rainy(condition):
-            rain_outerwear = outerwear is not None and "rain" in str(outerwear.get("weather_suitability", "")).lower()
+            rain_outerwear = outerwear is not None and (
+                self._weather_suitability_matches(str(outerwear.get("weather_suitability", "")), condition, temp)
+                or any(token in str(outerwear.get("category", "")).lower() for token in ["rain", "jacket", "coat"])
+            )
             rain_shoes = shoes is not None and (
-                "rain" in str(shoes.get("weather_suitability", "")).lower()
-                or "boot" in str(shoes.get("category", "")).lower()
+                self._weather_suitability_matches(str(shoes.get("weather_suitability", "")), condition, temp)
+                or any(token in str(shoes.get("category", "")).lower() for token in ["boot", "shoe", "sneaker"])
             )
             if not rain_outerwear or not rain_shoes:
                 return False, "Rain expected but no suitable rain outerwear or shoes were found."
 
         if temp >= 30 and selected_items:
             all_heavy = all(
-                str(item.get("warmth_level", "")).lower() == "warm"
+                self._normalize_warmth_level(item.get("warmth_level", "")) == "warm"
                 for item in selected_items
             )
             if all_heavy:
@@ -357,41 +597,47 @@ class RecommendationService:
             return "moderate"
         return "light"
 
-    def _select_clothing_by_role(
-        self, clothing_items: list[dict], role: str, warmth_need: str, condition: str
-    ) -> Optional[dict]:
-        candidates = []
+    def _weather_suitability_matches(self, suitability: str, condition: str, temp: int) -> bool:
+        if not suitability:
+            return True
 
-        for item in clothing_items:
-            category = self._categorize_clothing(item)
-            if category != role:
-                continue
+        normalized = suitability.lower()
+        if any(token in normalized for token in ["all", "any", "variable"]):
+            return True
 
-            item_warmth = str(item.get("warmth_level", "moderate")).lower()
-            if warmth_need == "warm" and item_warmth not in {"warm", "moderate"}:
-                continue
-            if warmth_need == "light" and item_warmth == "warm":
-                continue
+        if self._is_rainy(condition) and any(token in normalized for token in ["rain", "fall", "winter"]):
+            return True
 
-            suitability = str(item.get("weather_suitability", "any")).lower()
-            if self._is_rainy(condition) and "rain" not in suitability and "any" not in suitability:
-                continue
+        if temp >= 22 and any(token in normalized for token in ["spring", "summer"]):
+            return True
 
-            candidates.append(item)
+        if temp < 16 and any(token in normalized for token in ["fall", "winter"]):
+            return True
 
-        return random.choice(candidates) if candidates else None
+        return False
+
+    def _normalize_warmth_level(self, warmth_level: str) -> str:
+        normalized = str(warmth_level or "").strip().lower()
+        mapping = {
+            "heavy": "warm",
+            "warm": "warm",
+            "medium": "moderate",
+            "moderate": "moderate",
+            "light": "light",
+        }
+        return mapping.get(normalized, "moderate")
 
     def _categorize_clothing(self, clothing_item: dict) -> str:
         category = str(clothing_item.get("category", "")).lower()
 
-        if category in self.TOPS or any(keyword in category for keyword in ["shirt", "top", "blouse"]):
-            return "top"
-        if category in self.BOTTOMS or any(keyword in category for keyword in ["pant", "short", "skirt", "leg"]):
-            return "bottom"
-        if category in self.OUTERWEAR or any(keyword in category for keyword in ["jacket", "coat", "cardigan", "hoodie"]):
-            return "outerwear"
         if category in self.SHOES or any(keyword in category for keyword in ["shoe", "boot", "sandal", "sneaker"]):
             return "shoes"
+        if category in self.BOTTOMS or any(keyword in category for keyword in ["pant", "short", "skirt", "leg"]):
+            return "bottom"
+        if any(keyword in category for keyword in ["jacket", "coat", "cardigan", "blazer", "parka", "raincoat"]):
+            return "outerwear"
+        if category in self.TOPS or any(keyword in category for keyword in ["shirt", "top", "blouse", "sweater", "hoodie", "tee", "tank"]):
+            return "top"
 
         return "top"
 

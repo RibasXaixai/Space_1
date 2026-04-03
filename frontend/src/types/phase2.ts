@@ -17,6 +17,8 @@ export interface UploadedClothing {
 }
 
 export interface ClothingAnalysis {
+  item_id?: string;
+  status?: ClothingItemStatus;
   category: string;
   color: string;
   style: string;
