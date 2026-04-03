@@ -9,6 +9,34 @@ interface EditableClothingItemProps {
   disabled?: boolean;
 }
 
+function getBarcodeInspiredId(id: string): string {
+  let hash = 0;
+  for (const char of id) {
+    hash = (hash * 31 + char.charCodeAt(0)) % 1000000;
+  }
+  return String(hash).padStart(6, "0");
+}
+
+function getWardrobeTypeLabel(category?: string): string {
+  const normalized = (category || "").trim().toLowerCase();
+  if (["t-shirt", "shirt", "blouse", "sweater", "hoodie", "top", "tee", "tank"].some((token) => normalized.includes(token))) {
+    return "Top";
+  }
+  if (["jeans", "pants", "trouser", "shorts", "skirt", "leggings"].some((token) => normalized.includes(token))) {
+    return "Bottom";
+  }
+  if (["dress"].some((token) => normalized.includes(token))) {
+    return "Dress";
+  }
+  if (["jacket", "coat", "cardigan", "blazer", "parka", "raincoat"].some((token) => normalized.includes(token))) {
+    return "Outerwear";
+  }
+  if (["shoe", "sneaker", "boot", "sandal", "loafer", "heel"].some((token) => normalized.includes(token))) {
+    return "Shoes";
+  }
+  return "Other";
+}
+
 export default function EditableClothingItem({
   item,
   onAnalysisChange,
@@ -18,6 +46,8 @@ export default function EditableClothingItem({
 }: EditableClothingItemProps) {
   const isNeedsReview = item.status === "needs_review";
   const isRejected = item.status === "rejected";
+  const displayCode = getBarcodeInspiredId(item.id);
+  const itemTypeLabel = getWardrobeTypeLabel(item.analyzed?.category);
   const replaceInputRef = useRef<HTMLInputElement>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [editData, setEditData] = useState<ClothingAnalysis>(
@@ -76,8 +106,13 @@ export default function EditableClothingItem({
   if (isEditing) {
     return (
       <div className="rounded-3xl border-2 border-sky-400 bg-sky-50 p-6 shadow-lg">
-        <div className="mb-4 flex items-center justify-between">
-          <h3 className="font-semibold text-slate-900">{isNeedsReview ? "Review Clothing Item" : "Edit Clothing Item"}</h3>
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <div>
+            <h3 className="font-semibold text-slate-900">{isNeedsReview ? "Review Clothing Item" : "Edit Clothing Item"}</h3>
+            {!isRejected && (
+              <p className="mt-1 font-mono text-[11px] tracking-[0.3em] text-slate-500">ID {displayCode}</p>
+            )}
+          </div>
           <button
             onClick={() => setIsEditing(false)}
             disabled={disabled}
@@ -327,10 +362,31 @@ export default function EditableClothingItem({
         className="h-48 w-full object-cover"
       />
       <div className="p-4 space-y-3">
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">Wardrobe ID</p>
+              <p className="mt-1 font-mono text-xs font-bold tracking-[0.3em] text-slate-900">{displayCode}</p>
+            </div>
+            <div className="flex h-7 items-end gap-[2px]" aria-hidden="true">
+              {displayCode.split("").map((digit, idx) => (
+                <span
+                  key={`${digit}-${idx}`}
+                  className="w-1 rounded-sm bg-slate-700"
+                  style={{ height: `${10 + Number(digit) * 2}px` }}
+                />
+              ))}
+            </div>
+          </div>
+        </div>
+
         <div className="flex items-start justify-between">
           <div>
             {item.analyzed && (
               <div className="space-y-1">
+                <span className="inline-flex rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-700">
+                  {itemTypeLabel}
+                </span>
                 <p className="text-xs text-slate-500 uppercase tracking-wide">Category</p>
                 <p className="text-sm font-semibold text-slate-900">
                   {isNeedsReview ? "Needs confirmation" : item.analyzed.category}

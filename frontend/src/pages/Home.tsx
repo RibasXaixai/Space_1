@@ -95,6 +95,56 @@ export default function Home() {
     return item.analysis_source === "fallback" ? "needs_review" : "analyzed";
   };
 
+  const getWardrobeTypeLabel = (item: UploadedClothing): string => {
+    const normalized = (item.analyzed?.category || "").trim().toLowerCase();
+
+    if (item.status === "rejected") return "Rejected images";
+    if (["t-shirt", "shirt", "blouse", "sweater", "hoodie", "top", "tee", "tank"].some((token) => normalized.includes(token))) return "Tops";
+    if (["jeans", "pants", "trouser", "shorts", "skirt", "leggings"].some((token) => normalized.includes(token))) return "Bottoms";
+    if (normalized.includes("dress")) return "Dresses";
+    if (["jacket", "coat", "cardigan", "blazer", "parka", "raincoat"].some((token) => normalized.includes(token))) return "Outerwear";
+    if (["shoe", "sneaker", "boot", "sandal", "loafer", "heel"].some((token) => normalized.includes(token))) return "Shoes";
+    return "Other";
+  };
+
+  const typeOrder = ["Tops", "Bottoms", "Dresses", "Outerwear", "Shoes", "Other", "Rejected images"];
+  const groupedWardrobeSections = [
+    {
+      key: "analyzed" as const,
+      title: "Ready for outfits",
+      description: "These items are fully analyzed and ready for recommendations.",
+      containerClass: "border-emerald-200 bg-emerald-50/50",
+      badgeClass: "border-emerald-200 bg-emerald-100 text-emerald-800",
+      items: uploadedClothing.filter((item) => item.status === "analyzed"),
+    },
+    {
+      key: "needs_review" as const,
+      title: "Needs review",
+      description: "These items need your confirmation before they can be used.",
+      containerClass: "border-amber-200 bg-amber-50/50",
+      badgeClass: "border-amber-200 bg-amber-100 text-amber-800",
+      items: uploadedClothing.filter((item) => item.status === "needs_review"),
+    },
+    {
+      key: "rejected" as const,
+      title: "Rejected images",
+      description: "These uploads were blocked or could not be used as clothing items.",
+      containerClass: "border-rose-200 bg-rose-50/50",
+      badgeClass: "border-rose-200 bg-rose-100 text-rose-800",
+      items: uploadedClothing.filter((item) => item.status === "rejected"),
+    },
+  ]
+    .map((section) => ({
+      ...section,
+      groups: typeOrder
+        .map((label) => ({
+          label,
+          items: section.items.filter((item) => getWardrobeTypeLabel(item) === label),
+        }))
+        .filter((group) => group.items.length > 0),
+    }))
+    .filter((section) => section.items.length > 0);
+
   const playUploadFinishedSound = () => {
     try {
       const maybeAudioContext = (globalThis as any).AudioContext;
@@ -608,18 +658,53 @@ export default function Home() {
                 </button>
               </div>
               <p className="mb-4 text-sm text-slate-600">
-                Review and edit the detected clothing properties below. Click "Edit" to adjust any details.
+                Review and edit the detected clothing properties below. Items are grouped by status and clothing type, and every valid item now has a wardrobe ID.
               </p>
-              <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-                {uploadedClothing.map((item) => (
-                  <EditableClothingItem
-                    key={item.id}
-                    item={item}
-                    onAnalysisChange={handleAnalysisChange}
-                    onRemove={handleRemoveClothing}
-                    onReplace={handleReplaceClothing}
-                    disabled={isUploading}
-                  />
+              <div className="mb-4 flex flex-wrap gap-2">
+                {groupedWardrobeSections.map((section) => (
+                  <span
+                    key={section.key}
+                    className={`rounded-full border px-3 py-1 text-xs font-semibold ${section.badgeClass}`}
+                  >
+                    {section.title}: {section.items.length}
+                  </span>
+                ))}
+              </div>
+              <div className="space-y-6">
+                {groupedWardrobeSections.map((section) => (
+                  <div key={section.key} className={`rounded-3xl border p-4 sm:p-5 ${section.containerClass}`}>
+                    <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <h3 className="text-base font-semibold text-slate-900">{section.title}</h3>
+                        <p className="mt-1 text-sm text-slate-600">{section.description}</p>
+                      </div>
+                      <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${section.badgeClass}`}>
+                        {section.items.length} item{section.items.length !== 1 ? "s" : ""}
+                      </span>
+                    </div>
+
+                    <div className="space-y-5">
+                      {section.groups.map((group) => (
+                        <div key={`${section.key}-${group.label}`}>
+                          <p className="mb-3 text-xs font-bold uppercase tracking-widest text-slate-500">
+                            {group.label} ({group.items.length})
+                          </p>
+                          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+                            {group.items.map((item) => (
+                              <EditableClothingItem
+                                key={item.id}
+                                item={item}
+                                onAnalysisChange={handleAnalysisChange}
+                                onRemove={handleRemoveClothing}
+                                onReplace={handleReplaceClothing}
+                                disabled={isUploading}
+                              />
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 ))}
               </div>
             </div>
