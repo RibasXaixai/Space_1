@@ -10,6 +10,7 @@ import {
   generateRecommendationsPhase2,
   getWeatherForecastPhase2,
   refreshRecommendationDayPhase2,
+  refreshRecommendationWeekPhase2,
   uploadClothingPhase2,
   checkDuplicatesPhase2,
 } from "../services/phase2";
@@ -56,6 +57,9 @@ export default function Home() {
   const [feedbackByDay, setFeedbackByDay] = useState<Record<number, FeedbackValue | null>>({});
   const [recommendationCountByDay, setRecommendationCountByDay] = useState<Record<number, number>>({});
   const [refreshingDay, setRefreshingDay] = useState<number | null>(null);
+  const [isRefreshingWeek, setIsRefreshingWeek] = useState(false);
+  const [showRefreshWeekModal, setShowRefreshWeekModal] = useState(false);
+  const [styleResetTriggerCount, setStyleResetTriggerCount] = useState(0);
   const [refreshCooldownUntilByDay, setRefreshCooldownUntilByDay] = useState<Record<number, number>>({});
   const [uploadProgress, setUploadProgress] = useState<{ uploaded: number; total: number }>({
     uploaded: 0,
@@ -72,6 +76,7 @@ export default function Home() {
   const canGenerate = hasUploadedItems && location.trim().length > 0 && hasWeather && !loading;
   const totalLikes = Object.values(feedbackByDay).filter((value) => value === "like").length;
   const totalDislikes = Object.values(feedbackByDay).filter((value) => value === "dislike").length;
+  const showStartOverOnlyInModal = styleResetTriggerCount >= 3;
 
   const isNaCategory = (category: string | undefined): boolean => {
     const normalized = (category || "").trim().toLowerCase();
@@ -94,6 +99,19 @@ export default function Home() {
     // Default fallback: if analysis fell back, require review before use.
     return item.analysis_source === "fallback" ? "needs_review" : "analyzed";
   };
+
+  const buildClothingAnalyses = (items: UploadedClothing[]) =>
+    items.map((item) => ({
+      item_id: item.id,
+      status: item.status || "analyzed",
+      category: item.analyzed?.category || "",
+      color: item.analyzed?.color || "",
+      style: item.analyzed?.style || "",
+      warmth_level: item.analyzed?.warmth_level || "",
+      weather_suitability: item.analyzed?.weather_suitability || "",
+      gender: item.analyzed?.gender || "Unisex",
+      notes: item.analyzed?.notes || "",
+    }));
 
   const getWardrobeTypeLabel = (item: UploadedClothing): string => {
     const normalized = (item.analyzed?.category || "").trim().toLowerCase();
@@ -375,7 +393,20 @@ export default function Home() {
     setWarnings([]);
     setFeedbackByDay({});
     setRecommendationCountByDay({});
+    setStyleResetTriggerCount(0);
+    setShowRefreshWeekModal(false);
     setError(null);
+  };
+
+  const handleStartOver = () => {
+    setRecommendations(null);
+    setWarnings([]);
+    setError(null);
+    setFeedbackByDay({});
+    setRecommendationCountByDay({});
+    setShowRefreshWeekModal(false);
+    setIsRefreshingWeek(false);
+    setStyleResetTriggerCount(0);
   };
 
   const handleAnalysisChange = (id: string, analysis: ClothingAnalysis) => {
@@ -427,8 +458,8 @@ export default function Home() {
       return;
     }
 
-    const TOPS = ["T-Shirt", "Shirt", "Blouse", "Sweater", "Hoodie", "Jacket", "Coat"];
-    const BOTTOMS = ["Jeans", "Pants", "Shorts", "Skirt"];
+    const TOPS = ["T-Shirt", "Shirt", "Blouse", "Sweater", "Hoodie", "Top", "Tank"];
+    const BOTTOMS = ["Jeans", "Pants", "Shorts", "Skirt", "Trousers", "Leggings"];
 
     const usableItems = uploadedClothing.filter(
       (item) => item.status === "analyzed" && !item.is_exact_duplicate && !item.is_similar_duplicate
@@ -470,17 +501,7 @@ export default function Home() {
 
     try {
       // Use already analyzed data and weather forecast
-      const clothingAnalyses = usableItems.map((item) => ({
-        item_id: item.id,
-        status: item.status || "analyzed",
-        category: item.analyzed?.category || "",
-        color: item.analyzed?.color || "",
-        style: item.analyzed?.style || "",
-        warmth_level: item.analyzed?.warmth_level || "",
-        weather_suitability: item.analyzed?.weather_suitability || "",
-        gender: item.analyzed?.gender || "Unisex",
-        notes: item.analyzed?.notes || "",
-      }));
+      const clothingAnalyses = buildClothingAnalyses(usableItems);
 
       const recRes = await generateRecommendationsPhase2({
         clothing_data: clothingAnalyses,
@@ -505,10 +526,75 @@ export default function Home() {
   };
 
   const handleFeedback = (day: number, value: FeedbackValue) => {
-    setFeedbackByDay((prev) => ({
-      ...prev,
-      [day]: prev[day] === value ? null : value,
-    }));
+    setFeedbackByDay((prev) => {
+      const nextValue = prev[day] === value ? null : value;
+      const next = {
+        ...prev,
+        [day]: nextValue,
+      };
+
+      const dislikeCount = Object.values(next).filter((item) => item === "dislike").length;
+      if (value === "dislike" && nextValue === "dislike" && dislikeCount >= 5 && !showRefreshWeekModal) {
+        setStyleResetTriggerCount((count) => count + 1);
+        setShowRefreshWeekModal(true);
+      }
+
+      return next;
+    });
+  };
+
+  const handleCloseRefreshWeekModal = () => {
+    setShowRefreshWeekModal(false);
+    setFeedbackByDay((prev) =>
+      Object.entries(prev).reduce<Record<number, FeedbackValue | null>>((acc, [day, value]) => {
+        acc[Number(day)] = value === "dislike" ? null : value;
+        return acc;
+      }, {})
+    );
+  };
+
+  const handleRefreshWeek = async () => {
+    if (!weather || weather.length === 0) {
+      setError("Weather forecast is missing. Generate forecast again first.");
+      return;
+    }
+
+    const usableItems = uploadedClothing.filter(
+      (item) => item.status === "analyzed" && !item.is_exact_duplicate && !item.is_similar_duplicate
+    );
+    if (usableItems.length === 0 || !recommendations) {
+      setError("Please review at least one item before refreshing the full week.");
+      return;
+    }
+
+    setIsRefreshingWeek(true);
+    setError(null);
+
+    try {
+      const clothingAnalyses = buildClothingAnalyses(usableItems);
+      const response = await refreshRecommendationWeekPhase2({
+        clothing_data: clothingAnalyses,
+        weather_forecast: weather,
+        location,
+        current_recommendations: recommendations,
+      });
+
+      const refreshed = response.data;
+      setRecommendations(refreshed.recommendations);
+      setWarnings(refreshed.warnings || []);
+      setFeedbackByDay({});
+      setRecommendationCountByDay((prev) =>
+        (refreshed.recommendations || []).reduce<Record<number, number>>((acc, rec) => {
+          acc[rec.day] = (prev[rec.day] ?? 1) + 1;
+          return acc;
+        }, {})
+      );
+      setShowRefreshWeekModal(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to refresh the full week.");
+    } finally {
+      setIsRefreshingWeek(false);
+    }
   };
 
   const handleRefreshDay = async (day: number) => {
@@ -542,17 +628,7 @@ export default function Home() {
     setRefreshingDay(day);
 
     try {
-      const clothingAnalyses = usableItems.map((item) => ({
-        item_id: item.id,
-        status: item.status || "analyzed",
-        category: item.analyzed?.category || "",
-        color: item.analyzed?.color || "",
-        style: item.analyzed?.style || "",
-        warmth_level: item.analyzed?.warmth_level || "",
-        weather_suitability: item.analyzed?.weather_suitability || "",
-        gender: item.analyzed?.gender || "Unisex",
-        notes: item.analyzed?.notes || "",
-      }));
+      const clothingAnalyses = buildClothingAnalyses(usableItems);
 
       const response = await refreshRecommendationDayPhase2({
         day,
@@ -842,7 +918,7 @@ export default function Home() {
                   onLike={() => handleFeedback(rec.day, "like")}
                   onDislike={() => handleFeedback(rec.day, "dislike")}
                   selectedFeedback={feedbackByDay[rec.day] ?? null}
-                  disabled={isUploading}
+                  disabled={isUploading || isRefreshingWeek}
                 />
                 {(feedbackByDay[rec.day] === "dislike" || refreshingDay === rec.day) && (
                   <div className="flex justify-center">
@@ -851,6 +927,7 @@ export default function Home() {
                       onClick={() => handleRefreshDay(rec.day)}
                       disabled={
                         isUploading ||
+                        isRefreshingWeek ||
                         refreshingDay === rec.day ||
                         (refreshCooldownUntilByDay[rec.day] ?? 0) > Date.now()
                       }
@@ -871,18 +948,94 @@ export default function Home() {
           {/* Reset Button */}
           <div className="flex justify-center">
             <button
-              onClick={() => {
-                setRecommendations(null);
-                setWarnings([]);
-                setError(null);
-                setFeedbackByDay({});
-                setRecommendationCountByDay({});
-              }}
+              onClick={handleStartOver}
               disabled={isUploading}
               className="rounded-full border border-slate-200 bg-slate-100 px-8 py-3 text-sm font-semibold text-slate-900 transition hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-50"
             >
               ← Start Over
             </button>
+          </div>
+        </div>
+      )}
+
+      {showRefreshWeekModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 px-4 py-6 backdrop-blur-sm">
+          <div className="w-full max-w-lg overflow-hidden rounded-3xl border border-sky-200 bg-white shadow-2xl">
+            <div className="bg-gradient-to-r from-sky-500 to-cyan-500 px-6 py-4 text-white">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-[0.2em] text-white/80">Style reset</p>
+                  <h3 className="mt-1 text-xl font-bold">Your wardrobe wants another shot</h3>
+                </div>
+                {!showStartOverOnlyInModal && (
+                  <button
+                    type="button"
+                    onClick={handleCloseRefreshWeekModal}
+                    disabled={isRefreshingWeek}
+                    className="rounded-full bg-white/15 px-3 py-1 text-sm font-semibold text-white hover:bg-white/25 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="space-y-4 p-6">
+              {isRefreshingWeek ? (
+                <div className="space-y-4">
+                  <div className="flex h-48 w-full flex-col items-center justify-center rounded-2xl bg-slate-100 px-4 text-center">
+                    <div className="h-12 w-12 animate-spin rounded-full border-4 border-sky-200 border-t-sky-600" />
+                    <p className="mt-4 text-base font-semibold text-slate-900">Refreshing your week...</p>
+                    <p className="mt-1 text-sm text-slate-600">
+                      Finding a fresh set of outfit ideas for all 5 days.
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <div className="flex h-48 w-full items-center justify-center rounded-2xl bg-slate-100 text-6xl font-black text-slate-500">
+                    🤔
+                  </div>
+                  <div className="space-y-2 text-center">
+                    <p className="text-base font-semibold text-slate-900">You disliked all 5 outfit ideas.</p>
+                    <p className="text-sm text-slate-600">
+                      {showStartOverOnlyInModal
+                        ? "You have already retried this plan a few times. Start over and build a fresh wardrobe run."
+                        : "Let the wardrobe remix the whole week and try a fresh set of combinations."}
+                    </p>
+                  </div>
+                  <div className="flex flex-col gap-3 sm:flex-row sm:justify-center">
+                    {showStartOverOnlyInModal ? (
+                      <button
+                        type="button"
+                        onClick={handleStartOver}
+                        className="rounded-full border border-slate-200 bg-slate-100 px-5 py-2 text-sm font-semibold text-slate-900 hover:bg-slate-200"
+                      >
+                        Start Over
+                      </button>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          onClick={handleCloseRefreshWeekModal}
+                          className="rounded-full border border-slate-200 bg-white px-5 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                        >
+                          Keep current week
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleRefreshWeek}
+                          disabled={isRefreshingWeek}
+                          className="rounded-full bg-gradient-to-r from-sky-600 to-cyan-600 px-5 py-2 text-sm font-semibold text-white hover:from-sky-700 hover:to-cyan-700 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {isRefreshingWeek ? "Refreshing week..." : "Refresh week"}
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
           </div>
         </div>
       )}

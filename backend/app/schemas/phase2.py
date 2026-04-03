@@ -82,3 +82,17 @@ class RecommendationRefreshDayResponse(BaseModel):
     success: bool
     recommendation: RecommendationSchema
     message: Optional[str] = None
+
+
+class RecommendationRefreshWeekRequest(BaseModel):
+    clothing_data: list[ClothingAnalysisSchema]
+    weather_forecast: list[WeatherForecastSchema]
+    location: str
+    current_recommendations: list[RecommendationSchema] = []
+
+
+class RecommendationRefreshWeekResponse(BaseModel):
+    success: bool
+    recommendations: list[RecommendationSchema]
+    warnings: list[str] = []
+    message: Optional[str] = None

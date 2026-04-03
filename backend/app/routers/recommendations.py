@@ -5,6 +5,8 @@ from app.schemas.phase2 import (
     RecommendationsGenerateResponse,
     RecommendationRefreshDayRequest,
     RecommendationRefreshDayResponse,
+    RecommendationRefreshWeekRequest,
+    RecommendationRefreshWeekResponse,
     RecommendationSchema,
 )
 
@@ -76,4 +78,31 @@ def refresh_recommendation_day(request: RecommendationRefreshDayRequest):
         success=True,
         recommendation=RecommendationSchema(**refreshed),
         message=f"Successfully refreshed recommendation for day {request.day}.",
+    )
+
+
+@router.post("/refresh-week", response_model=RecommendationRefreshWeekResponse)
+def refresh_recommendation_week(request: RecommendationRefreshWeekRequest):
+    """Regenerate the entire 5-day week, avoiding the currently shown outfits when possible."""
+    if not recommendation_service:
+        raise HTTPException(
+            status_code=503,
+            detail="Recommendation service is not available. Please try again later.",
+        )
+
+    try:
+        refreshed = recommendation_service.refresh_recommendations_for_week(
+            clothing_data=request.clothing_data,
+            weather_forecast=request.weather_forecast,
+            location=request.location,
+            current_recommendations=request.current_recommendations,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return RecommendationRefreshWeekResponse(
+        success=True,
+        recommendations=[RecommendationSchema(**rec) for rec in refreshed["recommendations"]],
+        warnings=refreshed.get("warnings", []),
+        message="Successfully refreshed the full 5-day wardrobe plan.",
     )

@@ -97,3 +97,17 @@ export interface RecommendationRefreshDayResponse {
   recommendation: Recommendation;
   message?: string;
 }
+
+export interface RecommendationRefreshWeekRequest {
+  clothing_data: ClothingAnalysis[];
+  weather_forecast: WeatherForecast[];
+  location: string;
+  current_recommendations: Recommendation[];
+}
+
+export interface RecommendationRefreshWeekResponse {
+  success: boolean;
+  recommendations: Recommendation[];
+  warnings: string[];
+  message?: string;
+}

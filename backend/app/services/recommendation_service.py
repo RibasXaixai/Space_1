@@ -15,10 +15,12 @@ from app.schemas.phase2 import ClothingAnalysisSchema, WeatherForecastSchema
 class RecommendationService:
     """Service for generating outfit recommendations using rule-based filtering and viability checks."""
 
-    TOPS = ["t-shirt", "shirt", "blouse", "sweater", "hoodie", "jacket", "top", "tee", "tank"]
+    TOPS = ["t-shirt", "shirt", "blouse", "sweater", "hoodie", "top", "tee", "tank", "polo"]
     BOTTOMS = ["jeans", "pants", "shorts", "skirt", "leggings", "trousers", "bottom"]
+    DRESSES = ["dress", "jumpsuit", "romper", "overall"]
     OUTERWEAR = ["jacket", "coat", "cardigan", "blazer", "sweater", "hoodie", "parka", "raincoat"]
     SHOES = ["sneakers", "shoes", "boots", "sandals", "heels", "loafers", "shoe"]
+    ACCESSORIES = ["hat", "cap", "beanie", "scarf", "glove", "gloves", "belt", "bag", "watch", "tie", "sunglasses", "sock", "socks"]
 
     COLD_CONDITIONS = {"snowy", "chilly", "cold", "freezing", "snow", "blizzard", "ice"}
     RAINY_CONDITIONS = {"rainy", "rain", "drizzle", "precipitation", "shower", "storm"}
@@ -97,6 +99,68 @@ class RecommendationService:
             "location": location,
         }
 
+    def refresh_recommendations_for_week(
+        self,
+        clothing_data: list[ClothingAnalysisSchema],
+        weather_forecast: list[WeatherForecastSchema],
+        location: str,
+        current_recommendations: Optional[list] = None,
+    ) -> dict:
+        """Regenerate the full week, avoiding the currently visible outfits when alternatives exist."""
+        recommendations: list[dict] = []
+        warnings: list[str] = []
+        affected_days: list[int] = []
+
+        if not clothing_data:
+            raise ValueError("No clothing data provided")
+        if not weather_forecast:
+            raise ValueError("No weather forecast available")
+
+        clothing_items = [
+            item.model_dump() for item in clothing_data if getattr(item, "status", "analyzed") == "analyzed"
+        ]
+        if not clothing_items:
+            raise ValueError("No reviewed clothing items are available for this refresh")
+
+        forecast_days = [day.model_dump() for day in weather_forecast]
+        history: list[dict] = []
+        previous_days = [
+            recommendation.model_dump() if hasattr(recommendation, "model_dump") else recommendation
+            for recommendation in (current_recommendations or [])
+        ]
+
+        warnings.extend(self._build_variety_warnings(clothing_items, forecast_days))
+        warnings.extend(self._build_weather_gap_warnings(clothing_items, forecast_days))
+
+        for day_idx, day_forecast in enumerate(forecast_days[:5], start=1):
+            avoid_outfit = previous_days[day_idx - 1] if day_idx - 1 < len(previous_days) else None
+            outfit = self._build_outfit_for_day(
+                clothing_items,
+                day_forecast,
+                day_idx,
+                history,
+                avoid_outfit=avoid_outfit,
+            )
+            recommendations.append(outfit)
+            history.append(outfit)
+            if not outfit["is_viable"]:
+                affected_days.append(day_idx)
+
+        if affected_days:
+            warnings.insert(
+                0,
+                "Your current wardrobe may not be suitable for the expected weather conditions for some of the next 5 days.",
+            )
+            warnings.append(
+                "Affected days: " + ", ".join([f"Day {day}" for day in affected_days]) + "."
+            )
+
+        return {
+            "recommendations": recommendations,
+            "warnings": warnings,
+            "location": location,
+        }
+
     def refresh_recommendation_for_day(
         self,
         day: int,
@@ -135,24 +199,44 @@ class RecommendationService:
         day_forecast: dict,
         day_num: int,
         history: Optional[list[dict]] = None,
+        avoid_outfit: Optional[dict] = None,
     ) -> dict:
         """Build an outfit (AI-first, rule-based fallback) and evaluate viability."""
         history = history or []
-        ai_outfit = self._build_ai_outfit_for_day(clothing_items, day_forecast, day_num, history)
-        if ai_outfit is not None and not self._violates_rotation_rules(
-            ai_outfit.get("clothing_items", []),
-            history,
-            ai_outfit.get("selected_role_ids"),
-        ):
-            return ai_outfit
-
         temp = int(day_forecast.get("temperature", 20))
         condition = str(day_forecast.get("condition", "")).lower()
         humidity = int(day_forecast.get("humidity", 50))
         warmth_need = self._determine_warmth_need(temp, condition)
 
+        ai_outfit = self._build_ai_outfit_for_day(clothing_items, day_forecast, day_num, history)
+        if ai_outfit is not None:
+            ai_role_items = self._select_primary_items_by_role(
+                self._match_labels_to_wardrobe_items(ai_outfit.get("clothing_items", []), clothing_items)
+            )
+            ai_selected_items = [item for item in ai_role_items.values() if item]
+            ai_is_viable, ai_day_warning = self._evaluate_day_viability(
+                temp=temp,
+                condition=condition,
+                top=ai_role_items.get("top"),
+                bottom=ai_role_items.get("bottom"),
+                dress=ai_role_items.get("dress"),
+                outerwear=ai_role_items.get("outerwear"),
+                shoes=ai_role_items.get("shoes"),
+                selected_items=ai_selected_items,
+            )
+            ai_outfit["is_viable"] = ai_is_viable
+            ai_outfit["day_warning"] = ai_day_warning
+
+            if ai_is_viable and not self._violates_rotation_rules(
+                ai_outfit.get("clothing_items", []),
+                history,
+                ai_outfit.get("selected_role_ids"),
+            ) and not self._matches_avoid_outfit(ai_outfit, avoid_outfit):
+                return ai_outfit
+
         top_candidates = self._get_candidates_for_role(clothing_items, "top", warmth_need)
         bottom_candidates = self._get_candidates_for_role(clothing_items, "bottom", warmth_need)
+        dress_candidates = self._get_candidates_for_role(clothing_items, "dress", warmth_need)
         outerwear_candidates = self._get_candidates_for_role(clothing_items, "outerwear", warmth_need)
         shoe_candidates = self._get_candidates_for_role(clothing_items, "shoes", warmth_need)
 
@@ -163,49 +247,57 @@ class RecommendationService:
             outerwear_options = [None] + outerwear_candidates[:2]
         shoe_options = shoe_candidates if shoe_candidates else [None]
 
-        for top in top_candidates or [None]:
-            for bottom in bottom_candidates or [None]:
-                for outerwear in outerwear_options:
-                    for shoes in shoe_options:
-                        selected_items = [item for item in [top, bottom, outerwear, shoes] if item]
-                        outfit_items = [str(item.get("category", "")).title() for item in selected_items if item.get("category")]
-                        if not outfit_items:
-                            outfit_items = ["No suitable outfit found"]
+        dress_options = dress_candidates if dress_candidates else [None]
+        for dress in dress_options:
+            current_top_options = [None] if dress else (top_candidates or [None])
+            current_bottom_options = [None] if dress else (bottom_candidates or [None])
 
-                        is_viable, day_warning = self._evaluate_day_viability(
-                            temp=temp,
-                            condition=condition,
-                            top=top,
-                            bottom=bottom,
-                            outerwear=outerwear,
-                            shoes=shoes,
-                            selected_items=selected_items,
-                        )
+            for top in current_top_options:
+                for bottom in current_bottom_options:
+                    for outerwear in outerwear_options:
+                        for shoes in shoe_options:
+                            selected_items = [item for item in [dress, top, bottom, outerwear, shoes] if item]
+                            outfit_items = [str(item.get("category", "")).title() for item in selected_items if item.get("category")]
+                            if not outfit_items:
+                                outfit_items = ["No suitable outfit found"]
 
-                        score = self._score_outfit(
-                            selected_items=selected_items,
-                            outfit_items=outfit_items,
-                            warmth_need=warmth_need,
-                            temp=temp,
-                            condition=condition,
-                            is_viable=is_viable,
-                            history=history,
-                        )
+                            is_viable, day_warning = self._evaluate_day_viability(
+                                temp=temp,
+                                condition=condition,
+                                top=top,
+                                bottom=bottom,
+                                dress=dress,
+                                outerwear=outerwear,
+                                shoes=shoes,
+                                selected_items=selected_items,
+                            )
 
-                        candidate = {
-                            "top": top,
-                            "bottom": bottom,
-                            "outerwear": outerwear,
-                            "shoes": shoes,
-                            "selected_items": selected_items,
-                            "outfit_items": outfit_items,
-                            "is_viable": is_viable,
-                            "day_warning": day_warning,
-                            "score": score,
-                        }
+                            score = self._score_outfit(
+                                selected_items=selected_items,
+                                outfit_items=outfit_items,
+                                warmth_need=warmth_need,
+                                temp=temp,
+                                condition=condition,
+                                is_viable=is_viable,
+                                history=history,
+                                avoid_outfit=avoid_outfit,
+                            )
 
-                        if best_option is None or candidate["score"] > best_option["score"]:
-                            best_option = candidate
+                            candidate = {
+                                "dress": dress,
+                                "top": top,
+                                "bottom": bottom,
+                                "outerwear": outerwear,
+                                "shoes": shoes,
+                                "selected_items": selected_items,
+                                "outfit_items": outfit_items,
+                                "is_viable": is_viable,
+                                "day_warning": day_warning,
+                                "score": score,
+                            }
+
+                            if best_option is None or candidate["score"] > best_option["score"]:
+                                best_option = candidate
 
         if best_option is None:
             best_option = {
@@ -417,6 +509,7 @@ class RecommendationService:
         condition: str,
         is_viable: bool,
         history: list[dict],
+        avoid_outfit: Optional[dict] = None,
     ) -> float:
         score = 100.0 if is_viable else 35.0
 
@@ -443,6 +536,7 @@ class RecommendationService:
             outfit_items,
             history,
             self._get_selected_role_ids(selected_items),
+            avoid_outfit=avoid_outfit,
         )
         return score + random.uniform(0.0, 0.25)
 
@@ -451,6 +545,7 @@ class RecommendationService:
         outfit_items: list[str],
         history: list[dict],
         selected_role_ids: Optional[dict[str, Optional[str]]] = None,
+        avoid_outfit: Optional[dict] = None,
     ) -> float:
         if not history:
             return 0.0
@@ -484,6 +579,17 @@ class RecommendationService:
         if current_bottom and len(recent_bottoms) >= 2 and recent_bottoms[-1] == current_bottom and recent_bottoms[-2] == current_bottom:
             penalty += 120.0
 
+        if avoid_outfit:
+            avoid_signature = self._build_outfit_signature(avoid_outfit.get("clothing_items", []))
+            if current_signature == avoid_signature:
+                penalty += 140.0
+
+            avoid_role_ids = avoid_outfit.get("selected_role_ids", {})
+            if current_top_id and avoid_role_ids.get("top") == current_top_id:
+                penalty += 36.0
+            if current_bottom_id and avoid_role_ids.get("bottom") == current_bottom_id:
+                penalty += 36.0
+
         return penalty
 
     def _violates_rotation_rules(
@@ -515,6 +621,24 @@ class RecommendationService:
         if current_top and len(recent_tops) >= 2 and recent_tops[-1] == current_top and recent_tops[-2] == current_top:
             return True
         if current_bottom and len(recent_bottoms) >= 2 and recent_bottoms[-1] == current_bottom and recent_bottoms[-2] == current_bottom:
+            return True
+
+        return False
+
+    def _matches_avoid_outfit(self, outfit: dict, avoid_outfit: Optional[dict]) -> bool:
+        if not avoid_outfit:
+            return False
+
+        current_signature = self._build_outfit_signature(outfit.get("clothing_items", []))
+        avoid_signature = self._build_outfit_signature(avoid_outfit.get("clothing_items", []))
+        if current_signature == avoid_signature:
+            return True
+
+        current_role_ids = outfit.get("selected_role_ids", {})
+        avoid_role_ids = avoid_outfit.get("selected_role_ids", {})
+        if current_role_ids.get("top") and current_role_ids.get("top") == avoid_role_ids.get("top"):
+            return True
+        if current_role_ids.get("bottom") and current_role_ids.get("bottom") == avoid_role_ids.get("bottom"):
             return True
 
         return False
@@ -556,20 +680,28 @@ class RecommendationService:
 
         return normalized
 
-    def _get_selected_role_ids(self, selected_items: list[dict]) -> dict[str, Optional[str]]:
-        role_ids: dict[str, Optional[str]] = {
+    def _select_primary_items_by_role(self, selected_items: list[dict]) -> dict[str, Optional[dict]]:
+        role_items: dict[str, Optional[dict]] = {
             "top": None,
             "bottom": None,
+            "dress": None,
             "outerwear": None,
             "shoes": None,
         }
 
         for item in selected_items:
             role = self._categorize_clothing(item)
-            if role in role_ids and not role_ids[role] and item.get("item_id"):
-                role_ids[role] = str(item.get("item_id"))
+            if role in role_items and role_items[role] is None:
+                role_items[role] = item
 
-        return role_ids
+        return role_items
+
+    def _get_selected_role_ids(self, selected_items: list[dict]) -> dict[str, Optional[str]]:
+        role_items = self._select_primary_items_by_role(selected_items)
+        return {
+            role: str(item.get("item_id")) if item and item.get("item_id") else None
+            for role, item in role_items.items()
+        }
 
     def _extract_role_label(self, clothing_items: list[str], role: str) -> Optional[str]:
         for label in clothing_items:
@@ -808,13 +940,14 @@ class RecommendationService:
         condition: str,
         top: Optional[dict],
         bottom: Optional[dict],
+        dress: Optional[dict],
         outerwear: Optional[dict],
         shoes: Optional[dict],
         selected_items: list[dict],
     ) -> tuple[bool, Optional[str]]:
         """Evaluate whether wardrobe can support a safe and suitable outfit for the day."""
-        if not top or not bottom:
-            return False, "No complete outfit available (missing top or bottom) for this day."
+        if not dress and (not top or not bottom):
+            return False, "No complete outfit available (missing a proper top and bottom, or a dress) for this day."
 
         if self._is_very_cold_or_snow(temp, condition):
             has_warm_layer = any(
@@ -889,14 +1022,18 @@ class RecommendationService:
 
         if category in self.SHOES or any(keyword in category for keyword in ["shoe", "boot", "sandal", "sneaker"]):
             return "shoes"
+        if category in self.DRESSES or any(keyword in category for keyword in ["dress", "jumpsuit", "romper", "overall"]):
+            return "dress"
         if category in self.BOTTOMS or any(keyword in category for keyword in ["pant", "short", "skirt", "leg"]):
             return "bottom"
         if any(keyword in category for keyword in ["jacket", "coat", "cardigan", "blazer", "parka", "raincoat"]):
             return "outerwear"
-        if category in self.TOPS or any(keyword in category for keyword in ["shirt", "top", "blouse", "sweater", "hoodie", "tee", "tank"]):
+        if any(keyword in category for keyword in self.ACCESSORIES):
+            return "accessory"
+        if category in self.TOPS or any(keyword in category for keyword in ["shirt", "top", "blouse", "sweater", "hoodie", "tee", "tank", "polo"]):
             return "top"
 
-        return "top"
+        return "other"
 
     def _generate_explanation(
         self,

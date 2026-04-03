@@ -185,7 +185,7 @@ export default function WarningBanner({ warnings, visible }: WarningBannerProps)
           {warnings.map((warning, idx) => {
             const meta = getWarningMeta(warning);
             return (
-              <div key={idx} className={`rounded-2xl border p-4 shadow-sm ${meta.accentClass}`}>
+              <div key={idx} className={`rounded-2xl border p-4 shadow-sm md:col-span-2 ${meta.accentClass}`}>
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex items-start gap-3">
                     <span className="text-2xl">{meta.icon}</span>
