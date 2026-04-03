@@ -394,6 +394,41 @@ class RecommendationService:
         normalized = [self._canonical_item_label(item) for item in clothing_items if str(item).strip()]
         return tuple(sorted(normalized))
 
+    def _normalize_recommended_items(self, recommended_labels: list[str], wardrobe_items: list[dict]) -> list[str]:
+        available_categories: list[str] = []
+        seen_categories: set[str] = set()
+
+        for item in wardrobe_items:
+            category = str(item.get("category", "")).strip()
+            if category and category.lower() not in seen_categories:
+                available_categories.append(category)
+                seen_categories.add(category.lower())
+
+        normalized_items: list[str] = []
+        used_categories: set[str] = set()
+        for label in recommended_labels:
+            match = self._match_label_to_wardrobe_category(label, available_categories)
+            if match and match.lower() not in used_categories:
+                normalized_items.append(match)
+                used_categories.add(match.lower())
+
+        return normalized_items
+
+    def _match_label_to_wardrobe_category(self, label: str, available_categories: list[str]) -> Optional[str]:
+        canonical_label = self._canonical_item_label(label)
+        if not canonical_label:
+            return None
+
+        partial_match: Optional[str] = None
+        for category in available_categories:
+            canonical_category = self._canonical_item_label(category)
+            if canonical_category == canonical_label:
+                return category
+            if canonical_category and (canonical_category in canonical_label or canonical_label in canonical_category):
+                partial_match = partial_match or category
+
+        return partial_match
+
     def _build_ai_outfit_for_day(
         self,
         clothing_items: list[dict],
@@ -498,8 +533,9 @@ class RecommendationService:
             if not isinstance(clothing_items_out, list):
                 clothing_items_out = []
             clothing_items_out = [str(item).strip() for item in clothing_items_out if str(item).strip()]
+            clothing_items_out = self._normalize_recommended_items(clothing_items_out, clothing_items)
             if not clothing_items_out:
-                clothing_items_out = ["No suitable outfit found"]
+                return None
 
             weather_match = str(parsed.get("weather_match", "")).strip()
             if not weather_match:

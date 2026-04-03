@@ -45,6 +45,8 @@ function canonicalCategory(value: string): string {
     jacket: "jacket",
     jackets: "jacket",
     coat: "jacket",
+    blazer: "jacket",
+    cardigan: "jacket",
     sweater: "sweater",
     sweaters: "sweater",
     jumper: "sweater",
@@ -68,7 +70,13 @@ function canonicalCategory(value: string): string {
     heels: "shoes",
   };
 
-  return aliases[normalized] || normalized;
+  if (aliases[normalized]) return aliases[normalized];
+
+  for (const [key, mapped] of Object.entries(aliases)) {
+    if (normalized.includes(key)) return mapped;
+  }
+
+  return normalized;
 }
 
 function categoriesMatch(recommended: string, wardrobeCategory: string): boolean {
@@ -121,7 +129,8 @@ export default function RecommendationCard({
       }) || null;
 
     if (match) usedWardrobeIds.add(match.id);
-    return { label, match };
+    const displayLabel = match?.analyzed?.category || label;
+    return { label, displayLabel, match };
   });
 
   return (
@@ -191,7 +200,7 @@ export default function RecommendationCard({
         <div>
           <p className="mb-2 text-xs font-bold uppercase tracking-widest text-slate-400">Items</p>
           <div className="flex flex-wrap gap-3">
-            {itemVisuals.map(({ label, match }, idx) => (
+            {itemVisuals.map(({ label, displayLabel, match }, idx) => (
               <div
                 key={`${label}-${idx}`}
                 className={`w-24 overflow-hidden rounded-2xl border bg-slate-50 ${
@@ -201,16 +210,16 @@ export default function RecommendationCard({
                 {match ? (
                   <img
                     src={match.preview}
-                    alt={label}
+                    alt={displayLabel}
                     className="h-24 w-full object-cover"
                   />
                 ) : (
                   <div className="flex h-24 w-full items-center justify-center bg-slate-100 text-2xl">👕</div>
                 )}
                 <div className="px-2 py-1.5">
-                  <p className="truncate text-xs font-semibold text-slate-900">{label}</p>
+                  <p className="truncate text-xs font-semibold text-slate-900">{displayLabel}</p>
                   <p className="truncate text-[11px] text-slate-500">
-                    {match?.analyzed?.color || (label === "No suitable outfit found" ? "No match" : "Not found")}
+                    {match?.analyzed?.color || (label === "No suitable outfit found" ? "No match" : "Suggested item")}
                   </p>
                   {match?.analyzed?.gender && (
                     <span className="mt-1 inline-block rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-[10px] font-semibold text-violet-700">
