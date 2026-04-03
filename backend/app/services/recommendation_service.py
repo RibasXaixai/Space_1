@@ -139,7 +139,11 @@ class RecommendationService:
         """Build an outfit (AI-first, rule-based fallback) and evaluate viability."""
         history = history or []
         ai_outfit = self._build_ai_outfit_for_day(clothing_items, day_forecast, day_num, history)
-        if ai_outfit is not None and not self._violates_rotation_rules(ai_outfit.get("clothing_items", []), history):
+        if ai_outfit is not None and not self._violates_rotation_rules(
+            ai_outfit.get("clothing_items", []),
+            history,
+            ai_outfit.get("selected_role_ids"),
+        ):
             return ai_outfit
 
         temp = int(day_forecast.get("temperature", 20))
@@ -222,11 +226,20 @@ class RecommendationService:
 
         confidence = self._calculate_confidence(best_option["outfit_items"], best_option["is_viable"])
 
+        selected_item_ids = [
+            str(item.get("item_id"))
+            for item in best_option.get("selected_items", [])
+            if item.get("item_id")
+        ]
+        selected_role_ids = self._get_selected_role_ids(best_option.get("selected_items", []))
+
         return {
             "day": day_num,
             "date": day_forecast.get("date"),
             "outfit_description": explanation,
             "clothing_items": best_option["outfit_items"],
+            "selected_item_ids": selected_item_ids,
+            "selected_role_ids": selected_role_ids,
             "weather_match": f"{condition.title()}, {temp}C",
             "confidence": confidence,
             "recommendation_source": "rule-based",
@@ -426,10 +439,19 @@ class RecommendationService:
             if self._weather_suitability_matches(suitability, condition, temp):
                 score += 4
 
-        score -= self._rotation_penalty(outfit_items, history)
+        score -= self._rotation_penalty(
+            outfit_items,
+            history,
+            self._get_selected_role_ids(selected_items),
+        )
         return score + random.uniform(0.0, 0.25)
 
-    def _rotation_penalty(self, outfit_items: list[str], history: list[dict]) -> float:
+    def _rotation_penalty(
+        self,
+        outfit_items: list[str],
+        history: list[dict],
+        selected_role_ids: Optional[dict[str, Optional[str]]] = None,
+    ) -> float:
         if not history:
             return 0.0
 
@@ -437,7 +459,7 @@ class RecommendationService:
         current_signature = self._build_outfit_signature(outfit_items)
         previous_signature = self._build_outfit_signature(history[-1].get("clothing_items", []))
         if current_signature == previous_signature:
-            penalty += 45.0
+            penalty += 90.0
 
         current_top = self._extract_role_label(outfit_items, "top")
         current_bottom = self._extract_role_label(outfit_items, "bottom")
@@ -445,18 +467,31 @@ class RecommendationService:
         recent_bottoms = [self._extract_role_label(day.get("clothing_items", []), "bottom") for day in history[-2:]]
 
         if current_top and recent_tops and recent_tops[-1] == current_top:
-            penalty += 12.0
+            penalty += 28.0
         if current_bottom and recent_bottoms and recent_bottoms[-1] == current_bottom:
-            penalty += 12.0
+            penalty += 28.0
+
+        previous_role_ids = history[-1].get("selected_role_ids", {}) if history else {}
+        current_top_id = (selected_role_ids or {}).get("top") if selected_role_ids else None
+        current_bottom_id = (selected_role_ids or {}).get("bottom") if selected_role_ids else None
+        if current_top_id and previous_role_ids.get("top") == current_top_id:
+            penalty += 24.0
+        if current_bottom_id and previous_role_ids.get("bottom") == current_bottom_id:
+            penalty += 24.0
 
         if current_top and len(recent_tops) >= 2 and recent_tops[-1] == current_top and recent_tops[-2] == current_top:
-            penalty += 80.0
+            penalty += 120.0
         if current_bottom and len(recent_bottoms) >= 2 and recent_bottoms[-1] == current_bottom and recent_bottoms[-2] == current_bottom:
-            penalty += 80.0
+            penalty += 120.0
 
         return penalty
 
-    def _violates_rotation_rules(self, outfit_items: list[str], history: list[dict]) -> bool:
+    def _violates_rotation_rules(
+        self,
+        outfit_items: list[str],
+        history: list[dict],
+        selected_role_ids: Optional[dict[str, Optional[str]]] = None,
+    ) -> bool:
         if not history:
             return False
 
@@ -464,6 +499,13 @@ class RecommendationService:
         previous_signature = self._build_outfit_signature(history[-1].get("clothing_items", []))
         if current_signature == previous_signature:
             return True
+
+        previous_role_ids = history[-1].get("selected_role_ids", {}) if history else {}
+        if selected_role_ids:
+            if selected_role_ids.get("top") and previous_role_ids.get("top") == selected_role_ids.get("top"):
+                return True
+            if selected_role_ids.get("bottom") and previous_role_ids.get("bottom") == selected_role_ids.get("bottom"):
+                return True
 
         current_top = self._extract_role_label(outfit_items, "top")
         current_bottom = self._extract_role_label(outfit_items, "bottom")
@@ -514,6 +556,21 @@ class RecommendationService:
 
         return normalized
 
+    def _get_selected_role_ids(self, selected_items: list[dict]) -> dict[str, Optional[str]]:
+        role_ids: dict[str, Optional[str]] = {
+            "top": None,
+            "bottom": None,
+            "outerwear": None,
+            "shoes": None,
+        }
+
+        for item in selected_items:
+            role = self._categorize_clothing(item)
+            if role in role_ids and not role_ids[role] and item.get("item_id"):
+                role_ids[role] = str(item.get("item_id"))
+
+        return role_ids
+
     def _extract_role_label(self, clothing_items: list[str], role: str) -> Optional[str]:
         for label in clothing_items:
             if self._categorize_clothing({"category": label}) == role:
@@ -558,6 +615,34 @@ class RecommendationService:
                 partial_match = partial_match or category
 
         return partial_match
+
+    def _match_labels_to_wardrobe_items(self, labels: list[str], wardrobe_items: list[dict]) -> list[dict]:
+        matches: list[dict] = []
+        used_item_ids: set[str] = set()
+
+        for label in labels:
+            canonical_label = self._canonical_item_label(label)
+            selected_match: Optional[dict] = None
+
+            for item in wardrobe_items:
+                item_id = str(item.get("item_id", ""))
+                if item_id and item_id in used_item_ids:
+                    continue
+
+                canonical_category = self._canonical_item_label(item.get("category", ""))
+                if not canonical_category:
+                    continue
+
+                if canonical_category == canonical_label or canonical_category in canonical_label or canonical_label in canonical_category:
+                    selected_match = item
+                    break
+
+            if selected_match is not None:
+                matches.append(selected_match)
+                if selected_match.get("item_id"):
+                    used_item_ids.add(str(selected_match.get("item_id")))
+
+        return matches
 
     def _build_ai_outfit_for_day(
         self,
@@ -687,11 +772,17 @@ class RecommendationService:
             if not outfit_description:
                 outfit_description = "AI generated this recommendation based on your wardrobe and weather."
 
+            matched_items = self._match_labels_to_wardrobe_items(clothing_items_out, clothing_items)
+            selected_item_ids = [str(item.get("item_id")) for item in matched_items if item.get("item_id")]
+            selected_role_ids = self._get_selected_role_ids(matched_items)
+
             return {
                 "day": day_num,
                 "date": day_forecast.get("date"),
                 "outfit_description": outfit_description,
                 "clothing_items": clothing_items_out,
+                "selected_item_ids": selected_item_ids,
+                "selected_role_ids": selected_role_ids,
                 "weather_match": weather_match,
                 "confidence": confidence,
                 "recommendation_source": "ai",

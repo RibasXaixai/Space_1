@@ -34,6 +34,7 @@ export interface Recommendation {
   date: string;
   outfit_description: string;
   clothing_items: string[];
+  selected_item_ids?: string[];
   weather_match: string;
   confidence: number;
   recommendation_source?: "ai" | "rule-based" | string;

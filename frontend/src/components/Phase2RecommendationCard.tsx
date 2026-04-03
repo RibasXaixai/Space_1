@@ -121,12 +121,21 @@ export default function RecommendationCard({
   const recommendationSource = (recommendation.recommendation_source || "rule-based").toLowerCase();
   const usedWardrobeIds = new Set<string>();
 
-  const itemVisuals = recommendation.clothing_items.map((label) => {
-    const match =
-      wardrobeItems.find((item) => {
-        if (usedWardrobeIds.has(item.id)) return false;
-        return categoriesMatch(label, item.analyzed?.category || "");
-      }) || null;
+  const selectedIds = recommendation.selected_item_ids || [];
+  const itemVisuals = recommendation.clothing_items.map((label, idx) => {
+    const selectedId = selectedIds[idx];
+    let match =
+      (selectedId
+        ? wardrobeItems.find((item) => item.id === selectedId && !usedWardrobeIds.has(item.id))
+        : null) || null;
+
+    if (!match) {
+      match =
+        wardrobeItems.find((item) => {
+          if (usedWardrobeIds.has(item.id)) return false;
+          return categoriesMatch(label, item.analyzed?.category || "");
+        }) || null;
+    }
 
     if (match) usedWardrobeIds.add(match.id);
     const displayLabel = match?.analyzed?.category || label;

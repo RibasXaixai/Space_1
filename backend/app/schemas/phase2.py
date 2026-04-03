@@ -50,6 +50,7 @@ class RecommendationSchema(BaseModel):
     date: str
     outfit_description: str
     clothing_items: list[str]
+    selected_item_ids: list[str] = []
     weather_match: str
     confidence: float
     recommendation_source: str = "rule-based"
