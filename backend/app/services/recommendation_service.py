@@ -236,8 +236,10 @@ class RecommendationService:
 
     def _build_variety_warnings(self, clothing_items: list[dict], forecast_days: list[dict]) -> list[str]:
         warnings: list[str] = []
-        top_count = len({str(item.get("category", "")).lower() for item in clothing_items if self._categorize_clothing(item) == "top"})
-        bottom_count = len({str(item.get("category", "")).lower() for item in clothing_items if self._categorize_clothing(item) == "bottom"})
+        top_names = self._get_distinct_categories_for_role(clothing_items, "top")
+        bottom_names = self._get_distinct_categories_for_role(clothing_items, "bottom")
+        top_count = len(top_names)
+        bottom_count = len(bottom_names)
         plan_days = min(5, len(forecast_days))
 
         if top_count < 2:
@@ -248,15 +250,53 @@ class RecommendationService:
             warnings.append("Wardrobe variety is limited, so some repetition may still be necessary.")
 
         if top_count < plan_days:
+            top_summary = self._summarize_categories(top_names)
             warnings.append(
-                f"You currently have {top_count} top option(s) for {plan_days} forecast day(s), so repeats may still be needed."
+                f"Top rotation is limited: you currently have {top_count} option(s) for {plan_days} forecast day(s) ({top_summary}), so repeats may still be needed."
             )
         if bottom_count < plan_days:
+            bottom_summary = self._summarize_categories(bottom_names)
             warnings.append(
-                f"You currently have {bottom_count} bottom option(s) for {plan_days} forecast day(s), so repeats may still be needed."
+                f"Bottom rotation is limited: you currently have {bottom_count} option(s) for {plan_days} forecast day(s) ({bottom_summary}), so repeats may still be needed."
             )
 
         return warnings
+
+    def _get_distinct_categories_for_role(self, clothing_items: list[dict], role: str) -> list[str]:
+        categories: list[str] = []
+        seen: set[str] = set()
+
+        for item in clothing_items:
+            if self._categorize_clothing(item) != role:
+                continue
+            category = str(item.get("category", "")).strip()
+            if not category:
+                continue
+            key = category.lower()
+            if key in seen:
+                continue
+            categories.append(category)
+            seen.add(key)
+
+        return categories
+
+    def _summarize_categories(self, categories: list[str], max_items: int = 3) -> str:
+        if not categories:
+            return "no matching items"
+
+        visible = categories[:max_items]
+        if len(visible) == 1:
+            summary = visible[0]
+        elif len(visible) == 2:
+            summary = f"{visible[0]} and {visible[1]}"
+        else:
+            summary = ", ".join(visible[:-1]) + f", and {visible[-1]}"
+
+        remaining = len(categories) - len(visible)
+        if remaining > 0:
+            summary += f" (+{remaining} more)"
+
+        return summary
 
     def _build_weather_gap_warnings(self, clothing_items: list[dict], forecast_days: list[dict]) -> list[str]:
         warnings: list[str] = []
