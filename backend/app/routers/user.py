@@ -1,17 +1,23 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.routers.auth import get_current_user
 from app.models.user import User
 from app.services.user_service import update_user_location
+from app.utils.input_validation import sanitize_location
 
 router = APIRouter()
 
 
 class LocationUpdate(BaseModel):
-    location: str
+    location: str = Field(..., max_length=120)
+
+    @field_validator("location")
+    @classmethod
+    def validate_location(cls, value: str) -> str:
+        return sanitize_location(value)
 
 
 class LocationOut(BaseModel):

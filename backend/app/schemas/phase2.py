@@ -1,5 +1,8 @@
-from pydantic import BaseModel
 from typing import Optional
+
+from pydantic import BaseModel, Field, field_validator
+
+from app.utils.input_validation import sanitize_email, sanitize_location
 
 
 class ClothingAnalysisSchema(BaseModel):
@@ -33,9 +36,17 @@ class WeatherForecastSchema(BaseModel):
     humidity: int
 
 
-class WeatherForecastRequest(BaseModel):
-    location: str
-    days: int = 5
+class LocationBoundRequest(BaseModel):
+    location: str = Field(..., max_length=120)
+
+    @field_validator("location")
+    @classmethod
+    def validate_location(cls, value: str) -> str:
+        return sanitize_location(value)
+
+
+class WeatherForecastRequest(LocationBoundRequest):
+    days: int = Field(default=5, ge=1, le=7)
 
 
 class WeatherForecastResponse(BaseModel):
@@ -58,10 +69,9 @@ class RecommendationSchema(BaseModel):
     day_warning: Optional[str] = None
 
 
-class RecommendationsGenerateRequest(BaseModel):
+class RecommendationsGenerateRequest(LocationBoundRequest):
     clothing_data: list[ClothingAnalysisSchema]
     weather_forecast: list[WeatherForecastSchema]
-    location: str
 
 
 class RecommendationsGenerateResponse(BaseModel):
@@ -71,11 +81,10 @@ class RecommendationsGenerateResponse(BaseModel):
     message: Optional[str] = None
 
 
-class RecommendationRefreshDayRequest(BaseModel):
-    day: int
+class RecommendationRefreshDayRequest(LocationBoundRequest):
+    day: int = Field(..., ge=1, le=7)
     clothing_data: list[ClothingAnalysisSchema]
     weather_forecast: list[WeatherForecastSchema]
-    location: str
 
 
 class RecommendationRefreshDayResponse(BaseModel):
@@ -84,10 +93,9 @@ class RecommendationRefreshDayResponse(BaseModel):
     message: Optional[str] = None
 
 
-class RecommendationRefreshWeekRequest(BaseModel):
+class RecommendationRefreshWeekRequest(LocationBoundRequest):
     clothing_data: list[ClothingAnalysisSchema]
     weather_forecast: list[WeatherForecastSchema]
-    location: str
     current_recommendations: list[RecommendationSchema] = []
 
 
@@ -95,4 +103,30 @@ class RecommendationRefreshWeekResponse(BaseModel):
     success: bool
     recommendations: list[RecommendationSchema]
     warnings: list[str] = []
+    message: Optional[str] = None
+
+
+class SendPlanWardrobeItemSchema(BaseModel):
+    id: str
+    file_path: Optional[str] = None
+    category: str
+    color: str
+    gender: str = "Unisex"
+
+
+class SendPlanEmailRequest(LocationBoundRequest):
+    email: str = Field(..., max_length=254)
+    weather_forecast: list[WeatherForecastSchema]
+    recommendations: list[RecommendationSchema]
+    warnings: list[str] = []
+    wardrobe_items: list[SendPlanWardrobeItemSchema] = []
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, value: str) -> str:
+        return sanitize_email(value)
+
+
+class SendPlanEmailResponse(BaseModel):
+    success: bool
     message: Optional[str] = None

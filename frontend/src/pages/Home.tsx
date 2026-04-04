@@ -13,6 +13,7 @@ import {
   refreshRecommendationWeekPhase2,
   uploadClothingPhase2,
   checkDuplicatesPhase2,
+  sendPlanEmailPhase2,
 } from "../services/phase2";
 import { validateImageFile } from "../utils/imageValidation";
 import type {
@@ -70,6 +71,9 @@ export default function Home() {
   const [showGameOverFlash, setShowGameOverFlash] = useState(false);
   const [showCelebrationModal, setShowCelebrationModal] = useState(false);
   const [showCelebrationFlash, setShowCelebrationFlash] = useState(false);
+  const [planEmail, setPlanEmail] = useState("");
+  const [isSendingEmail, setIsSendingEmail] = useState(false);
+  const [emailSendState, setEmailSendState] = useState<{ type: "success" | "error"; message: string } | null>(null);
   const wasUploadingRef = useRef(false);
   const startOverSoundPlayedRef = useRef(false);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -91,6 +95,15 @@ export default function Home() {
     const normalized = (category || "").trim().toLowerCase();
     return ["n/a", "na", "none", "unknown", "not available", "not_applicable"].includes(normalized);
   };
+
+  const sanitizeEmailInput = (value: string): string => {
+    return value
+      .toLowerCase()
+      .replace(/[\u0000-\u001F\u007F\s<>\"'`]/g, "")
+      .slice(0, 254);
+  };
+
+  const isValidEmail = (value: string): boolean => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
 
   const normalizeCategoryLabel = (category: string | undefined): string => {
     return isNaCategory(category) ? "Needs Review" : (category || "");
@@ -366,6 +379,9 @@ export default function Home() {
 
   const triggerCelebrationFeedback = () => {
     playCelebrationSound();
+    setPlanEmail("");
+    setEmailSendState(null);
+    setIsSendingEmail(false);
     setShowCelebrationModal(true);
     setShowCelebrationFlash(true);
 
@@ -382,6 +398,76 @@ export default function Home() {
   const handleCloseCelebrationModal = () => {
     setShowCelebrationModal(false);
     setShowCelebrationFlash(false);
+    setEmailSendState(null);
+    setPlanEmail("");
+    setIsSendingEmail(false);
+  };
+
+  const handleCelebrationAction = async () => {
+    if (emailSendState?.type === "success") {
+      handleCloseCelebrationModal();
+      return;
+    }
+
+    const trimmedEmail = sanitizeEmailInput(planEmail);
+
+    if (!trimmedEmail) {
+      handleCloseCelebrationModal();
+      return;
+    }
+
+    if (!isValidEmail(trimmedEmail)) {
+      setEmailSendState({
+        type: "error",
+        message: "Please enter a valid email address before continuing.",
+      });
+      return;
+    }
+
+    if (!recommendations || recommendations.length === 0 || !weather || weather.length === 0) {
+      setEmailSendState({
+        type: "error",
+        message: "Your plan is not ready to email yet. Generate the 5-day plan first.",
+      });
+      return;
+    }
+
+    setIsSendingEmail(true);
+    setEmailSendState(null);
+
+    try {
+      await sendPlanEmailPhase2({
+        email: trimmedEmail,
+        location,
+        weather_forecast: weather,
+        recommendations,
+        warnings,
+        wardrobe_items: uploadedClothing
+          .filter((item) => item.status === "analyzed")
+          .map((item) => ({
+            id: item.id,
+            file_path: item.file_path,
+            category: item.analyzed?.category || "Unknown",
+            color: item.analyzed?.color || "Unknown",
+            gender: item.analyzed?.gender || "Unisex",
+          })),
+      });
+
+      setEmailSendState({
+        type: "success",
+        message: `Your 5-day wardrobe plan was sent to ${trimmedEmail}.`,
+      });
+    } catch (err) {
+      const maybeError = err as { response?: { data?: { detail?: string } } };
+      setEmailSendState({
+        type: "error",
+        message:
+          maybeError.response?.data?.detail ||
+          (err instanceof Error ? err.message : "We could not send the email right now. Please try again."),
+      });
+    } finally {
+      setIsSendingEmail(false);
+    }
   };
 
   useEffect(() => {
@@ -615,6 +701,9 @@ export default function Home() {
     setShowRefreshWeekModal(false);
     setShowCelebrationModal(false);
     setShowCelebrationFlash(false);
+    setPlanEmail("");
+    setEmailSendState(null);
+    setIsSendingEmail(false);
     setError(null);
   };
 
@@ -627,6 +716,9 @@ export default function Home() {
     setShowRefreshWeekModal(false);
     setShowCelebrationModal(false);
     setShowCelebrationFlash(false);
+    setPlanEmail("");
+    setEmailSendState(null);
+    setIsSendingEmail(false);
     setIsRefreshingWeek(false);
     setStyleResetTriggerCount(0);
   };
@@ -722,6 +814,8 @@ export default function Home() {
     setRecommendationCountByDay({});
     setShowCelebrationModal(false);
     setShowCelebrationFlash(false);
+    setEmailSendState(null);
+    setIsSendingEmail(false);
 
     try {
       // Use already analyzed data and weather forecast
@@ -909,32 +1003,34 @@ export default function Home() {
   return (
     <section className="space-y-8 py-6 sm:space-y-10 sm:py-8">
       {/* Header */}
-      <div className="relative overflow-hidden rounded-3xl border border-slate-200 bg-white/90 p-6 shadow-xl backdrop-blur sm:p-10">
-        <div className="pointer-events-none absolute -top-20 right-0 h-48 w-48 rounded-full bg-cyan-200/50 blur-3xl" />
-        <div className="pointer-events-none absolute -bottom-16 left-10 h-44 w-44 rounded-full bg-blue-200/40 blur-3xl" />
-        <div className="relative max-w-4xl">
-          <h1 className="mt-3 text-3xl font-bold text-slate-900 sm:text-5xl">
-            Amazing Wardrobe Planner
-          </h1>
-          <p className="mt-4 max-w-2xl text-base text-slate-600 sm:text-lg">
-            Build your next 5-day style mission: upload your wardrobe, lock your location, and unlock weather-aware outfit plans.
-          </p>
-          <div className="mt-6 grid gap-3 sm:grid-cols-3">
-            <div className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3">
-              <p className="text-xs font-semibold uppercase tracking-wider text-sky-700">Step 1</p>
-              <p className="mt-1 text-sm font-medium text-slate-900">Upload clothing</p>
-            </div>
-            <div className="rounded-2xl border border-cyan-200 bg-cyan-50 px-4 py-3">
-              <p className="text-xs font-semibold uppercase tracking-wider text-cyan-700">Step 2</p>
-              <p className="mt-1 text-sm font-medium text-slate-900">Set location + weather</p>
-            </div>
-            <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3">
-              <p className="text-xs font-semibold uppercase tracking-wider text-emerald-700">Step 3</p>
-              <p className="mt-1 text-sm font-medium text-slate-900">Generate and react</p>
+      {!hasRecommendations && (
+        <div className="relative overflow-hidden rounded-3xl border border-slate-200 bg-white/90 p-6 shadow-xl backdrop-blur sm:p-10">
+          <div className="pointer-events-none absolute -top-20 right-0 h-48 w-48 rounded-full bg-cyan-200/50 blur-3xl" />
+          <div className="pointer-events-none absolute -bottom-16 left-10 h-44 w-44 rounded-full bg-blue-200/40 blur-3xl" />
+          <div className="relative max-w-4xl">
+            <h1 className="mt-3 text-3xl font-bold text-slate-900 sm:text-5xl">
+              Amazing Wardrobe Planner
+            </h1>
+            <p className="mt-4 max-w-2xl text-base text-slate-600 sm:text-lg">
+              Build your next 5-day style trip: upload your wardrobe, set your location, and unlock weather-aware outfit plans.
+            </p>
+            <div className="mt-6 grid gap-3 sm:grid-cols-3">
+              <div className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3">
+                <p className="text-xs font-semibold uppercase tracking-wider text-sky-700">Step 1</p>
+                <p className="mt-1 text-sm font-medium text-slate-900">Upload clothing</p>
+              </div>
+              <div className="rounded-2xl border border-cyan-200 bg-cyan-50 px-4 py-3">
+                <p className="text-xs font-semibold uppercase tracking-wider text-cyan-700">Step 2</p>
+                <p className="mt-1 text-sm font-medium text-slate-900">Set location + weather</p>
+              </div>
+              <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3">
+                <p className="text-xs font-semibold uppercase tracking-wider text-emerald-700">Step 3</p>
+                <p className="mt-1 text-sm font-medium text-slate-900">Generate and react</p>
+              </div>
             </div>
           </div>
         </div>
-      </div>
+      )}
 
       {/* Input Section */}
       {!hasRecommendations && (
@@ -1052,7 +1148,7 @@ export default function Home() {
               <div className="flex gap-4">
                 <div className="text-2xl">❌</div>
                 <div>
-                  <p className="font-semibold text-red-900">Something blocked your mission</p>
+                  <p className="font-semibold text-red-900">Something blocked your trip</p>
                   <p className="mt-1 text-sm text-red-800">{error}</p>
                 </div>
               </div>
@@ -1094,19 +1190,41 @@ export default function Home() {
       {/* Results Section */}
       {hasRecommendations && (
         <div className="space-y-6 sm:space-y-8">
-          <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
-            <h2 className="mb-1 text-2xl font-bold text-slate-900">Your 5-Day Wardrobe Plan</h2>
-            <p className="text-sm text-slate-600">📍 <span className="font-semibold">{location}</span></p>
-            <div className="mt-4 flex flex-wrap gap-2">
-              <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
-                👍 Likes: {totalLikes}
+          <div className="relative overflow-hidden rounded-3xl border border-slate-200 bg-white/95 p-6 shadow-xl sm:p-8">
+            <div className="pointer-events-none absolute -top-16 right-0 h-40 w-40 rounded-full bg-cyan-200/50 blur-3xl" />
+            <div className="pointer-events-none absolute -bottom-16 left-8 h-36 w-36 rounded-full bg-fuchsia-200/40 blur-3xl" />
+
+            <div className="relative flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
+              <div className="max-w-3xl">
+                <p className="text-xs font-bold uppercase tracking-[0.22em] text-cyan-700">Style trip ready</p>
+                <h1 className="mt-2 text-3xl font-bold text-slate-900 sm:text-4xl">Your 5-Day Wardrobe Plan</h1>
+                <p className="mt-3 max-w-2xl text-sm text-slate-600 sm:text-base">
+                  Built from your wardrobe and the latest forecast for <span className="font-semibold text-slate-900">{location}</span>. Review each day, keep the looks you love, and refresh anything you want to swap.
+                </p>
+              </div>
+
+              <div className="flex flex-wrap gap-2 lg:max-w-sm lg:justify-end">
+                <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
+                  👍 Likes: {totalLikes}
+                </span>
+                <span className="rounded-full border border-rose-200 bg-rose-50 px-3 py-1 text-xs font-semibold text-rose-700">
+                  👎 Dislikes: {totalDislikes}
+                </span>
+                <span className="rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-xs font-semibold text-sky-700">
+                  🗓 Days: {recommendations.length}
+                </span>
+              </div>
+            </div>
+
+            <div className="relative mt-5 flex flex-wrap items-center gap-3 border-t border-slate-200/80 pt-4">
+              <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-700">
+                📍 {location}
               </span>
-              <span className="rounded-full border border-rose-200 bg-rose-50 px-3 py-1 text-xs font-semibold text-rose-700">
-                👎 Dislikes: {totalDislikes}
-              </span>
-              <span className="rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-xs font-semibold text-sky-700">
-                🗓 Days: {recommendations.length}
-              </span>
+              {weatherLocation && weatherLocation !== location && (
+                <span className="rounded-full border border-cyan-200 bg-cyan-50 px-3 py-1 text-xs font-semibold text-cyan-700">
+                  Forecast source: {weatherLocation}
+                </span>
+              )}
             </div>
           </div>
 
@@ -1195,6 +1313,7 @@ export default function Home() {
               ← Start Over
             </button>
           </div>
+
         </div>
       )}
 
@@ -1245,20 +1364,63 @@ export default function Home() {
               </div>
 
               <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3">
-                <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-emerald-800">Mission status</p>
+                <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-emerald-800">Trip status</p>
                 <div className="mt-2 flex items-center justify-center gap-2 text-sm font-semibold text-emerald-900">
                   <span className="rounded-full bg-white px-3 py-1 shadow-sm">👍 {recommendations?.length ?? 5}/{recommendations?.length ?? 5} likes</span>
                   <span className="rounded-full bg-white px-3 py-1 shadow-sm">✨ Week approved</span>
                 </div>
               </div>
 
+              <div className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-4 text-left shadow-sm">
+                <label htmlFor="celebration-email" className="text-sm font-semibold text-slate-900">
+                  Email this 5-day plan
+                </label>
+                <p className="mt-1 text-xs text-slate-600">
+                  Optional: enter a valid email and click <span className="font-semibold">Let’s go</span> to receive the full wardrobe plan, location, weather, and notes in your inbox.
+                </p>
+                <div className="mt-3">
+                  <input
+                    id="celebration-email"
+                    type="email"
+                    inputMode="email"
+                    autoComplete="email"
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    maxLength={254}
+                    value={planEmail}
+                    onChange={(event) => {
+                      setPlanEmail(sanitizeEmailInput(event.target.value));
+                      if (emailSendState) {
+                        setEmailSendState(null);
+                      }
+                    }}
+                    disabled={isSendingEmail || emailSendState?.type === "success"}
+                    placeholder="you@example.com"
+                    className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-200 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"
+                  />
+                </div>
+                {emailSendState && (
+                  <p
+                    className={`mt-3 rounded-xl px-3 py-2 text-sm font-medium ${
+                      emailSendState.type === "success"
+                        ? "bg-emerald-100 text-emerald-800"
+                        : "bg-rose-100 text-rose-800"
+                    }`}
+                  >
+                    {emailSendState.message}
+                  </p>
+                )}
+              </div>
+
               <div className="flex justify-center">
                 <button
                   type="button"
-                  onClick={handleCloseCelebrationModal}
-                  className="rounded-full bg-gradient-to-r from-fuchsia-600 via-amber-500 to-sky-500 px-6 py-2.5 text-sm font-semibold text-white shadow-lg transition hover:scale-[1.02]"
+                  onClick={handleCelebrationAction}
+                  disabled={isSendingEmail}
+                  className="rounded-full bg-gradient-to-r from-fuchsia-600 via-amber-500 to-sky-500 px-6 py-2.5 text-sm font-semibold text-white shadow-lg transition hover:scale-[1.02] disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  Let’s go ✨
+                  {isSendingEmail ? "Sending..." : emailSendState?.type === "success" ? "Close" : "Let’s go ✨"}
                 </button>
               </div>
             </div>

@@ -6,6 +6,8 @@ import type {
   RecommendationRefreshWeekResponse,
   RecommendationsGenerateRequest,
   RecommendationsGenerateResponse,
+  SendPlanEmailRequest,
+  SendPlanEmailResponse,
   WeatherForecastRequest,
   WeatherForecastResponse,
 } from "../types/phase2";
@@ -36,4 +38,8 @@ export function uploadClothingPhase2(formData: FormData) {
 
 export function checkDuplicatesPhase2(items: { id: string; file_path: string }[]) {
   return api.post("/check-duplicates", { items });
+}
+
+export function sendPlanEmailPhase2(payload: SendPlanEmailRequest) {
+  return api.post<SendPlanEmailResponse>("/recommendations/email-plan", payload);
 }

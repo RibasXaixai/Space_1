@@ -7,10 +7,19 @@ interface LocationInputProps {
   disabled?: boolean;
 }
 
+const MAX_LOCATION_LENGTH = 120;
+
+const sanitizeLocationValue = (value: string): string => {
+  return value
+    .replace(/[\u0000-\u001F\u007F<>{}$`|\\]/g, "")
+    .replace(/\s+/g, " ")
+    .slice(0, MAX_LOCATION_LENGTH);
+};
+
 export default function LocationInput({ value, onChange, placeholder, disabled = false }: LocationInputProps) {
   const handleChange = (event: ChangeEvent<HTMLInputElement>) => {
     if (disabled) return;
-    onChange(event.target.value);
+    onChange(sanitizeLocationValue(event.target.value));
   };
 
   return (
@@ -21,19 +30,22 @@ export default function LocationInput({ value, onChange, placeholder, disabled =
           <label className="mb-2 block text-sm font-semibold text-slate-900">
             Trip Location
           </label>
-          <p className="mb-3 text-xs text-slate-500">Use city and country for the best forecast accuracy.</p>
+          <p className="mb-3 text-xs text-slate-500">Use city and country in English for the best forecast accuracy. 2–120 characters.</p>
           <input
             type="text"
             value={value}
             onChange={handleChange}
             disabled={disabled}
+            maxLength={MAX_LOCATION_LENGTH}
+            autoComplete="address-level2"
+            spellCheck={false}
             placeholder={placeholder || "e.g., New York, NY or London, UK"}
             className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-200 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
           />
           <p className="mt-2 text-xs text-slate-500">
             {disabled
               ? "Wait until the clothing upload finishes before entering your trip location."
-              : "We'll use this to get weather forecasts for your outfit recommendations"}
+              : "We'll use this to get weather forecasts for your outfit recommendations."}
           </p>
         </div>
       </div>

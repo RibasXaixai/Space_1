@@ -24,7 +24,7 @@ export default function UploadClothingPage() {
     setError(null);
 
     if (!file || !token) {
-      setError("Please select an image file and sign in first.");
+      setError("Please select an image file first.");
       return;
     }
 

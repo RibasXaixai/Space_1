@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 60
     openai_api_key: str = ""
     weather_api_key: str = ""
+    resend_api_key: str = ""
+    email_from: str = "onboarding@resend.dev"
+    public_backend_url: str = "http://localhost:8000"
 
     class Config:
         env_file = Path(__file__).resolve().parents[2] / ".env"

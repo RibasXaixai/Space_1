@@ -111,3 +111,25 @@ export interface RecommendationRefreshWeekResponse {
   warnings: string[];
   message?: string;
 }
+
+export interface SendPlanWardrobeItem {
+  id: string;
+  file_path?: string;
+  category: string;
+  color: string;
+  gender: string;
+}
+
+export interface SendPlanEmailRequest {
+  email: string;
+  location: string;
+  weather_forecast: WeatherForecast[];
+  recommendations: Recommendation[];
+  warnings: string[];
+  wardrobe_items: SendPlanWardrobeItem[];
+}
+
+export interface SendPlanEmailResponse {
+  success: boolean;
+  message?: string;
+}

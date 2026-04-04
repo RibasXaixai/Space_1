@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException
+from app.services.email_service import EmailService
 from app.services.recommendation_service import RecommendationService
 from app.schemas.phase2 import (
     RecommendationsGenerateRequest,
@@ -8,6 +9,8 @@ from app.schemas.phase2 import (
     RecommendationRefreshWeekRequest,
     RecommendationRefreshWeekResponse,
     RecommendationSchema,
+    SendPlanEmailRequest,
+    SendPlanEmailResponse,
 )
 
 router = APIRouter()
@@ -18,6 +21,12 @@ try:
 except Exception as e:
     print(f"Warning: Failed to initialize RecommendationService: {str(e)}")
     recommendation_service = None
+
+try:
+    email_service = EmailService()
+except Exception as e:
+    print(f"Warning: Failed to initialize EmailService: {str(e)}")
+    email_service = None
 
 
 @router.post("/generate", response_model=RecommendationsGenerateResponse)
@@ -105,4 +114,33 @@ def refresh_recommendation_week(request: RecommendationRefreshWeekRequest):
         recommendations=[RecommendationSchema(**rec) for rec in refreshed["recommendations"]],
         warnings=refreshed.get("warnings", []),
         message="Successfully refreshed the full 5-day wardrobe plan.",
+    )
+
+
+@router.post("/email-plan", response_model=SendPlanEmailResponse)
+def send_plan_email(request: SendPlanEmailRequest):
+    """Send the current 5-day wardrobe plan to the user's email."""
+    if not email_service:
+        raise HTTPException(
+            status_code=503,
+            detail="Email service is not available. Please try again later.",
+        )
+
+    try:
+        email_service.send_plan_email(
+            recipient_email=request.email,
+            location=request.location,
+            weather_forecast=request.weather_forecast,
+            recommendations=request.recommendations,
+            warnings=request.warnings,
+            wardrobe_items=request.wardrobe_items,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to send the email: {exc}") from exc
+
+    return SendPlanEmailResponse(
+        success=True,
+        message=f"Your 5-day wardrobe plan was sent to {request.email}.",
     )
