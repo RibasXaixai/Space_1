@@ -46,6 +46,7 @@ export default function Home() {
   type FeedbackValue = "like" | "dislike";
   const BATCH_SIZE = 10;
   const REFRESH_COOLDOWN_MS = 15000;
+  const MAX_STYLE_RESET_TRIES = 3;
   const [uploadedClothing, setUploadedClothing] = useState<UploadedClothing[]>([]);
   const [location, setLocation] = useState<string>("");
   const [weather, setWeather] = useState<WeatherForecast[] | null>(null);
@@ -66,7 +67,14 @@ export default function Home() {
     total: 0,
   });
   const [uploadedFromAPI, setUploadedFromAPI] = useState(false);
+  const [showGameOverFlash, setShowGameOverFlash] = useState(false);
+  const [showCelebrationModal, setShowCelebrationModal] = useState(false);
+  const [showCelebrationFlash, setShowCelebrationFlash] = useState(false);
   const wasUploadingRef = useRef(false);
+  const startOverSoundPlayedRef = useRef(false);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const gameOverFlashTimeoutRef = useRef<number | null>(null);
+  const celebrationFlashTimeoutRef = useRef<number | null>(null);
   const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
   const hasUploadedItems = uploadedClothing.length > 0;
@@ -76,7 +84,8 @@ export default function Home() {
   const canGenerate = hasUploadedItems && location.trim().length > 0 && hasWeather && !loading;
   const totalLikes = Object.values(feedbackByDay).filter((value) => value === "like").length;
   const totalDislikes = Object.values(feedbackByDay).filter((value) => value === "dislike").length;
-  const showStartOverOnlyInModal = styleResetTriggerCount >= 3;
+  const showStartOverOnlyInModal = styleResetTriggerCount >= MAX_STYLE_RESET_TRIES;
+  const remainingStyleResetTries = Math.max(0, MAX_STYLE_RESET_TRIES - styleResetTriggerCount);
 
   const isNaCategory = (category: string | undefined): boolean => {
     const normalized = (category || "").trim().toLowerCase();
@@ -163,42 +172,216 @@ export default function Home() {
     }))
     .filter((section) => section.items.length > 0);
 
+  const getAudioContext = () => {
+    const maybeWindow = globalThis as typeof globalThis & { webkitAudioContext?: typeof AudioContext };
+    const AudioContextClass = maybeWindow.AudioContext || maybeWindow.webkitAudioContext;
+    if (!AudioContextClass) return null;
+
+    if (!audioContextRef.current || audioContextRef.current.state === "closed") {
+      audioContextRef.current = new AudioContextClass();
+    }
+
+    return audioContextRef.current;
+  };
+
   const playUploadFinishedSound = () => {
     try {
-      const maybeAudioContext = (globalThis as any).AudioContext;
-      if (!maybeAudioContext) return;
+      const audioContext = getAudioContext();
+      if (!audioContext) return;
 
-      const audioContext = new maybeAudioContext();
-      const gainNode = audioContext.createGain();
-      gainNode.connect(audioContext.destination);
+      void audioContext.resume().then(() => {
+        const now = audioContext.currentTime;
+        const gainNode = audioContext.createGain();
+        gainNode.connect(audioContext.destination);
 
-      const note1 = audioContext.createOscillator();
-      note1.type = "sine";
-      note1.frequency.setValueAtTime(784, audioContext.currentTime);
-      note1.connect(gainNode);
+        const note1 = audioContext.createOscillator();
+        note1.type = "sine";
+        note1.frequency.setValueAtTime(784, now);
+        note1.connect(gainNode);
 
-      const note2 = audioContext.createOscillator();
-      note2.type = "sine";
-      note2.frequency.setValueAtTime(1047, audioContext.currentTime + 0.1);
-      note2.connect(gainNode);
+        const note2 = audioContext.createOscillator();
+        note2.type = "sine";
+        note2.frequency.setValueAtTime(1047, now + 0.1);
+        note2.connect(gainNode);
 
-      gainNode.gain.setValueAtTime(0.0001, audioContext.currentTime);
-      gainNode.gain.exponentialRampToValueAtTime(0.06, audioContext.currentTime + 0.02);
-      gainNode.gain.exponentialRampToValueAtTime(0.0001, audioContext.currentTime + 0.24);
+        gainNode.gain.setValueAtTime(0.0001, now);
+        gainNode.gain.exponentialRampToValueAtTime(0.08, now + 0.02);
+        gainNode.gain.exponentialRampToValueAtTime(0.0001, now + 0.24);
 
-      note1.start(audioContext.currentTime);
-      note1.stop(audioContext.currentTime + 0.1);
-      note2.start(audioContext.currentTime + 0.1);
-      note2.stop(audioContext.currentTime + 0.24);
-
-      setTimeout(() => {
-        audioContext.close().catch(() => {
-          // Ignore close errors to keep UX smooth.
-        });
-      }, 350);
+        note1.start(now);
+        note1.stop(now + 0.1);
+        note2.start(now + 0.1);
+        note2.stop(now + 0.24);
+      }).catch(() => {
+        // Ignore resume errors to keep UX smooth.
+      });
     } catch {
       // If browser blocks audio, continue silently.
     }
+  };
+
+  const playStartOverGameOverSound = () => {
+    try {
+      const audioContext = getAudioContext();
+      if (!audioContext) return;
+
+      void audioContext.resume().then(() => {
+        const now = audioContext.currentTime + 0.02;
+        const masterGain = audioContext.createGain();
+        const compressor = audioContext.createDynamicsCompressor();
+
+        compressor.threshold.setValueAtTime(-24, now);
+        compressor.knee.setValueAtTime(20, now);
+        compressor.ratio.setValueAtTime(14, now);
+        compressor.attack.setValueAtTime(0.003, now);
+        compressor.release.setValueAtTime(0.2, now);
+
+        masterGain.connect(compressor);
+        compressor.connect(audioContext.destination);
+
+        const notes = [880, 783.99, 659.25, 523.25, 392, 261.63];
+        const noteDuration = 0.24;
+        const spacing = 0.32;
+
+        notes.forEach((frequency, index) => {
+          const startTime = now + index * spacing;
+
+          [1, 0.5].forEach((multiplier, layerIndex) => {
+            const oscillator = audioContext.createOscillator();
+            const noteGain = audioContext.createGain();
+
+            oscillator.type = layerIndex === 0 ? "square" : "sawtooth";
+            oscillator.frequency.setValueAtTime(frequency * multiplier, startTime);
+            oscillator.frequency.exponentialRampToValueAtTime(Math.max(110, frequency * multiplier * 0.92), startTime + noteDuration);
+
+            noteGain.gain.setValueAtTime(0.0001, startTime);
+            noteGain.gain.exponentialRampToValueAtTime(layerIndex === 0 ? 0.14 : 0.07, startTime + 0.015);
+            noteGain.gain.exponentialRampToValueAtTime(0.0001, startTime + noteDuration);
+
+            oscillator.connect(noteGain);
+            noteGain.connect(masterGain);
+            oscillator.start(startTime);
+            oscillator.stop(startTime + noteDuration);
+          });
+        });
+
+        masterGain.gain.setValueAtTime(0.0001, now);
+        masterGain.gain.exponentialRampToValueAtTime(0.22, now + 0.03);
+        masterGain.gain.exponentialRampToValueAtTime(0.0001, now + 2.05);
+      }).catch(() => {
+        // Ignore resume errors to keep UX smooth.
+      });
+    } catch {
+      // If browser blocks audio, continue silently.
+    }
+  };
+
+  const triggerGameOverFeedback = () => {
+    playStartOverGameOverSound();
+    setShowGameOverFlash(true);
+
+    if (gameOverFlashTimeoutRef.current) {
+      window.clearTimeout(gameOverFlashTimeoutRef.current);
+    }
+
+    gameOverFlashTimeoutRef.current = window.setTimeout(() => {
+      setShowGameOverFlash(false);
+      gameOverFlashTimeoutRef.current = null;
+    }, 650);
+  };
+
+  const playCelebrationSound = () => {
+    try {
+      const audioContext = getAudioContext();
+      if (!audioContext) return;
+
+      void audioContext.resume().then(() => {
+        const now = audioContext.currentTime + 0.02;
+        const masterGain = audioContext.createGain();
+        const compressor = audioContext.createDynamicsCompressor();
+
+        compressor.threshold.setValueAtTime(-18, now);
+        compressor.knee.setValueAtTime(18, now);
+        compressor.ratio.setValueAtTime(10, now);
+        compressor.attack.setValueAtTime(0.002, now);
+        compressor.release.setValueAtTime(0.18, now);
+
+        masterGain.connect(compressor);
+        compressor.connect(audioContext.destination);
+
+        const melody = [523.25, 659.25, 783.99, 1046.5, 1318.51];
+        melody.forEach((frequency, index) => {
+          const startTime = now + index * 0.16;
+          const oscillator = audioContext.createOscillator();
+          const harmony = audioContext.createOscillator();
+          const noteGain = audioContext.createGain();
+
+          oscillator.type = "triangle";
+          harmony.type = "square";
+          oscillator.frequency.setValueAtTime(frequency, startTime);
+          harmony.frequency.setValueAtTime(frequency * 1.5, startTime);
+
+          noteGain.gain.setValueAtTime(0.0001, startTime);
+          noteGain.gain.exponentialRampToValueAtTime(0.16, startTime + 0.02);
+          noteGain.gain.exponentialRampToValueAtTime(0.0001, startTime + 0.2);
+
+          oscillator.connect(noteGain);
+          harmony.connect(noteGain);
+          noteGain.connect(masterGain);
+          oscillator.start(startTime);
+          harmony.start(startTime);
+          oscillator.stop(startTime + 0.2);
+          harmony.stop(startTime + 0.2);
+        });
+
+        [0.18, 0.42, 0.74].forEach((offset) => {
+          const startTime = now + offset;
+          const oscillator = audioContext.createOscillator();
+          const burstGain = audioContext.createGain();
+
+          oscillator.type = "sawtooth";
+          oscillator.frequency.setValueAtTime(1400, startTime);
+          oscillator.frequency.exponentialRampToValueAtTime(220, startTime + 0.12);
+
+          burstGain.gain.setValueAtTime(0.0001, startTime);
+          burstGain.gain.exponentialRampToValueAtTime(0.07, startTime + 0.01);
+          burstGain.gain.exponentialRampToValueAtTime(0.0001, startTime + 0.13);
+
+          oscillator.connect(burstGain);
+          burstGain.connect(masterGain);
+          oscillator.start(startTime);
+          oscillator.stop(startTime + 0.13);
+        });
+
+        masterGain.gain.setValueAtTime(0.0001, now);
+        masterGain.gain.exponentialRampToValueAtTime(0.24, now + 0.04);
+        masterGain.gain.exponentialRampToValueAtTime(0.0001, now + 1.35);
+      }).catch(() => {
+        // Ignore resume errors to keep UX smooth.
+      });
+    } catch {
+      // If browser blocks audio, continue silently.
+    }
+  };
+
+  const triggerCelebrationFeedback = () => {
+    playCelebrationSound();
+    setShowCelebrationModal(true);
+    setShowCelebrationFlash(true);
+
+    if (celebrationFlashTimeoutRef.current) {
+      window.clearTimeout(celebrationFlashTimeoutRef.current);
+    }
+
+    celebrationFlashTimeoutRef.current = window.setTimeout(() => {
+      setShowCelebrationFlash(false);
+      celebrationFlashTimeoutRef.current = null;
+    }, 900);
+  };
+
+  const handleCloseCelebrationModal = () => {
+    setShowCelebrationModal(false);
+    setShowCelebrationFlash(false);
   };
 
   useEffect(() => {
@@ -213,6 +396,41 @@ export default function Home() {
 
     wasUploadingRef.current = false;
   }, [isUploading, uploadedFromAPI]);
+
+  useEffect(() => {
+    const shouldPlayGameOver = showRefreshWeekModal && showStartOverOnlyInModal && !isRefreshingWeek;
+
+    if (shouldPlayGameOver && !startOverSoundPlayedRef.current) {
+      triggerGameOverFeedback();
+      startOverSoundPlayedRef.current = true;
+      return;
+    }
+
+    if (!shouldPlayGameOver) {
+      startOverSoundPlayedRef.current = false;
+      setShowGameOverFlash(false);
+    }
+  }, [showRefreshWeekModal, showStartOverOnlyInModal, isRefreshingWeek]);
+
+  useEffect(() => {
+    return () => {
+      if (gameOverFlashTimeoutRef.current) {
+        window.clearTimeout(gameOverFlashTimeoutRef.current);
+      }
+      if (celebrationFlashTimeoutRef.current) {
+        window.clearTimeout(celebrationFlashTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!hasRecommendations) return;
+
+    window.scrollTo({
+      top: 0,
+      behavior: "smooth",
+    });
+  }, [hasRecommendations]);
 
   const handleFilesSelected = async (files: File[]) => {
     if (files.length === 0) return;
@@ -395,6 +613,8 @@ export default function Home() {
     setRecommendationCountByDay({});
     setStyleResetTriggerCount(0);
     setShowRefreshWeekModal(false);
+    setShowCelebrationModal(false);
+    setShowCelebrationFlash(false);
     setError(null);
   };
 
@@ -405,6 +625,8 @@ export default function Home() {
     setFeedbackByDay({});
     setRecommendationCountByDay({});
     setShowRefreshWeekModal(false);
+    setShowCelebrationModal(false);
+    setShowCelebrationFlash(false);
     setIsRefreshingWeek(false);
     setStyleResetTriggerCount(0);
   };
@@ -498,6 +720,8 @@ export default function Home() {
     setWarnings([]);
     setFeedbackByDay({});
     setRecommendationCountByDay({});
+    setShowCelebrationModal(false);
+    setShowCelebrationFlash(false);
 
     try {
       // Use already analyzed data and weather forecast
@@ -526,21 +750,36 @@ export default function Home() {
   };
 
   const handleFeedback = (day: number, value: FeedbackValue) => {
-    setFeedbackByDay((prev) => {
-      const nextValue = prev[day] === value ? null : value;
-      const next = {
-        ...prev,
-        [day]: nextValue,
-      };
+    const currentValue = feedbackByDay[day] ?? null;
+    const nextValue = currentValue === value ? null : value;
+    const nextFeedback = {
+      ...feedbackByDay,
+      [day]: nextValue,
+    };
 
-      const dislikeCount = Object.values(next).filter((item) => item === "dislike").length;
-      if (value === "dislike" && nextValue === "dislike" && dislikeCount >= 5 && !showRefreshWeekModal) {
-        setStyleResetTriggerCount((count) => count + 1);
-        setShowRefreshWeekModal(true);
+    setFeedbackByDay(nextFeedback);
+
+    const dislikeCount = Object.values(nextFeedback).filter((item) => item === "dislike").length;
+    if (value === "dislike" && nextValue === "dislike" && dislikeCount >= 5 && !showRefreshWeekModal) {
+      const nextTriggerCount = styleResetTriggerCount + 1;
+      if (nextTriggerCount >= MAX_STYLE_RESET_TRIES) {
+        triggerGameOverFeedback();
+        startOverSoundPlayedRef.current = true;
       }
+      setStyleResetTriggerCount((count) => count + 1);
+      setShowRefreshWeekModal(true);
+    }
 
-      return next;
-    });
+    const likeCount = Object.values(nextFeedback).filter((item) => item === "like").length;
+    if (
+      value === "like" &&
+      nextValue === "like" &&
+      recommendations &&
+      recommendations.length > 0 &&
+      likeCount === recommendations.length
+    ) {
+      triggerCelebrationFeedback();
+    }
   };
 
   const handleCloseRefreshWeekModal = () => {
@@ -790,6 +1029,7 @@ export default function Home() {
           <LocationInput
             value={location}
             onChange={handleLocationChange}
+            disabled={isUploading}
           />
 
           {!hasWeather && location.trim().length > 2 && (
@@ -958,9 +1198,80 @@ export default function Home() {
         </div>
       )}
 
+      {showCelebrationModal && (
+        <div className={`fixed inset-0 z-50 flex items-center justify-center px-4 py-6 backdrop-blur-sm transition-all duration-300 ${showCelebrationFlash ? "bg-amber-950/70" : "bg-slate-950/60"}`}>
+          <div className="pointer-events-none absolute inset-0 overflow-hidden">
+            <div className="absolute left-[8%] top-[12%] text-4xl animate-bounce" style={{ animationDelay: "0ms" }}>🎆</div>
+            <div className="absolute right-[10%] top-[14%] text-4xl animate-bounce" style={{ animationDelay: "150ms" }}>🎉</div>
+            <div className="absolute left-[14%] bottom-[18%] text-3xl animate-pulse" style={{ animationDelay: "120ms" }}>✨</div>
+            <div className="absolute right-[16%] bottom-[16%] text-3xl animate-pulse" style={{ animationDelay: "260ms" }}>🎇</div>
+            <div className="absolute left-1/4 top-1/4 h-24 w-24 rounded-full bg-fuchsia-400/30 animate-ping" />
+            <div className="absolute right-1/4 top-1/3 h-20 w-20 rounded-full bg-amber-300/30 animate-ping" style={{ animationDelay: "220ms" }} />
+            <div className="absolute bottom-1/4 left-1/2 h-16 w-16 -translate-x-1/2 rounded-full bg-sky-300/25 animate-ping" style={{ animationDelay: "320ms" }} />
+          </div>
+
+          <div className={`relative w-full max-w-xl overflow-hidden rounded-3xl border shadow-2xl transition-all duration-300 ${showCelebrationFlash ? "scale-[1.03] border-amber-300 bg-amber-50 ring-4 ring-amber-300/80" : "border-fuchsia-200 bg-white"}`}>
+            <div className="bg-gradient-to-r from-fuchsia-600 via-amber-400 to-sky-500 px-6 py-4 text-white">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-[0.2em] text-white/80">Style celebration</p>
+                  <h3 className="mt-1 text-xl font-bold">Ready to Slay the Week</h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleCloseCelebrationModal}
+                  className="rounded-full bg-white/15 px-3 py-1 text-sm font-semibold text-white hover:bg-white/25"
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+
+            <div className="space-y-5 p-6 text-center">
+              <div className="relative flex h-48 w-full items-center justify-center overflow-hidden rounded-2xl bg-gradient-to-br from-amber-100 via-fuchsia-50 to-sky-100">
+                <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.9),_transparent_55%)]" />
+                <div className="absolute left-6 top-5 text-3xl animate-bounce">🎉</div>
+                <div className="absolute right-6 top-6 text-3xl animate-bounce" style={{ animationDelay: "150ms" }}>✨</div>
+                <div className="absolute bottom-5 left-8 text-3xl animate-pulse">🎆</div>
+                <div className="absolute bottom-6 right-8 text-3xl animate-pulse" style={{ animationDelay: "180ms" }}>👏</div>
+                <span className="relative text-7xl drop-shadow-sm animate-bounce">😎</span>
+              </div>
+
+              <div className="space-y-2">
+                <p className="text-2xl font-black text-slate-900">Ready to Slay the Week</p>
+                <p className="text-sm text-slate-600">
+                  All 5 recommendation days got a <span className="font-semibold text-emerald-700">Like</span>. Your outfit plan is locked in and ready to shine.
+                </p>
+              </div>
+
+              <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3">
+                <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-emerald-800">Mission status</p>
+                <div className="mt-2 flex items-center justify-center gap-2 text-sm font-semibold text-emerald-900">
+                  <span className="rounded-full bg-white px-3 py-1 shadow-sm">👍 {recommendations?.length ?? 5}/{recommendations?.length ?? 5} likes</span>
+                  <span className="rounded-full bg-white px-3 py-1 shadow-sm">✨ Week approved</span>
+                </div>
+              </div>
+
+              <div className="flex justify-center">
+                <button
+                  type="button"
+                  onClick={handleCloseCelebrationModal}
+                  className="rounded-full bg-gradient-to-r from-fuchsia-600 via-amber-500 to-sky-500 px-6 py-2.5 text-sm font-semibold text-white shadow-lg transition hover:scale-[1.02]"
+                >
+                  Let’s go ✨
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showRefreshWeekModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 px-4 py-6 backdrop-blur-sm">
-          <div className="w-full max-w-lg overflow-hidden rounded-3xl border border-sky-200 bg-white shadow-2xl">
+        <div className={`fixed inset-0 z-50 flex items-center justify-center px-4 py-6 backdrop-blur-sm transition-all duration-300 ${showGameOverFlash && showStartOverOnlyInModal ? "bg-rose-950/75" : "bg-slate-950/60"}`}>
+          {showGameOverFlash && showStartOverOnlyInModal && (
+            <div className="pointer-events-none absolute inset-0 animate-pulse bg-rose-300/35" />
+          )}
+          <div className={`relative w-full max-w-lg overflow-hidden rounded-3xl border shadow-2xl transition-all duration-300 ${showGameOverFlash && showStartOverOnlyInModal ? "scale-[1.03] border-rose-300 bg-rose-50 ring-4 ring-rose-300/80" : "border-sky-200 bg-white"}`}>
             <div className="bg-gradient-to-r from-sky-500 to-cyan-500 px-6 py-4 text-white">
               <div className="flex items-center justify-between gap-3">
                 <div>
@@ -1004,6 +1315,31 @@ export default function Home() {
                         : "Let the wardrobe remix the whole week and try a fresh set of combinations."}
                     </p>
                   </div>
+
+                  <div className={`rounded-2xl border px-4 py-3 text-left ${showStartOverOnlyInModal ? "border-rose-200 bg-rose-50" : "border-amber-200 bg-amber-50"}`}>
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-slate-600">Retry meter</p>
+                      <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${showStartOverOnlyInModal ? "bg-rose-100 text-rose-700" : "bg-amber-100 text-amber-800"}`}>
+                        {showStartOverOnlyInModal
+                          ? "Start Over unlocked"
+                          : `${remainingStyleResetTries} ${remainingStyleResetTries === 1 ? "try" : "tries"} left`}
+                      </span>
+                    </div>
+                    <div className="mt-3 flex gap-2">
+                      {Array.from({ length: MAX_STYLE_RESET_TRIES }).map((_, index) => (
+                        <span
+                          key={index}
+                          className={`h-2 flex-1 rounded-full ${index < styleResetTriggerCount ? "bg-rose-400" : showStartOverOnlyInModal ? "bg-rose-200" : "bg-emerald-300"}`}
+                        />
+                      ))}
+                    </div>
+                    <p className={`mt-2 text-xs ${showStartOverOnlyInModal ? "text-rose-700" : "text-amber-800"}`}>
+                      {showStartOverOnlyInModal
+                        ? "You have used all wardrobe remix tries. The next step is to start over with a fresh run."
+                        : `You can refresh the full week ${remainingStyleResetTries} more ${remainingStyleResetTries === 1 ? "time" : "times"} before Start Over becomes the only option.`}
+                    </p>
+                  </div>
+
                   <div className="flex flex-col gap-3 sm:flex-row sm:justify-center">
                     {showStartOverOnlyInModal ? (
                       <button
