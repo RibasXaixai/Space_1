@@ -7,6 +7,7 @@ from fastapi.staticfiles import StaticFiles
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
+from app.core.config import settings
 from app.routers.health import router as health_router
 from app.routers.analyze import router as analyze_router
 from app.routers.weather_forecast import router as weather_router
@@ -21,12 +22,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:4173",
-        "http://127.0.0.1:4173",
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-    ],
+    allow_origins=settings.backend_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

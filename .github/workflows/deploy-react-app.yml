@@ -36,6 +36,8 @@ jobs:
         run: npm ci
 
       - name: Build app
+        env:
+          VITE_API_URL: ${{ vars.VITE_API_URL }}
         run: npm run build
 
       - name: Setup Pages

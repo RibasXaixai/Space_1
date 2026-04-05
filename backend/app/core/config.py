@@ -5,6 +5,7 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     app_name: str = "AI Wardrobe Planner"
     backend_cors_origins: list[str] = [
+        "https://ribasxaixai.github.io",
         "http://localhost:5173",
         "http://127.0.0.1:5173",
         "http://localhost:4173",
