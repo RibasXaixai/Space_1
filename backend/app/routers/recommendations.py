@@ -89,6 +89,7 @@ def refresh_recommendation_day(request: RecommendationRefreshDayRequest, http_re
             day=request.day,
             clothing_data=request.clothing_data,
             weather_forecast=request.weather_forecast,
+            current_recommendation=request.current_recommendation,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

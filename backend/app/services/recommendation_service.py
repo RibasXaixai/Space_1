@@ -166,8 +166,9 @@ class RecommendationService:
         day: int,
         clothing_data: list[ClothingAnalysisSchema],
         weather_forecast: list[WeatherForecastSchema],
+        current_recommendation: Optional[dict] = None,
     ) -> dict:
-        """Regenerate recommendation for a single selected day."""
+        """Regenerate recommendation for a single selected day, avoiding the current outfit when possible."""
         if day < 1:
             raise ValueError("day must be >= 1")
 
@@ -191,7 +192,18 @@ class RecommendationService:
             history.append(prior_outfit)
 
         day_forecast = weather_forecast[day - 1].model_dump()
-        return self._build_outfit_for_day(clothing_items, day_forecast, day, history)
+        avoid_outfit = (
+            current_recommendation.model_dump()
+            if hasattr(current_recommendation, "model_dump")
+            else current_recommendation
+        )
+        return self._build_outfit_for_day(
+            clothing_items,
+            day_forecast,
+            day,
+            history,
+            avoid_outfit=avoid_outfit,
+        )
 
     def _build_outfit_for_day(
         self,

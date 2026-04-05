@@ -144,3 +144,48 @@ def test_ai_rainy_day_is_completed_with_weather_safe_items_when_available() -> N
     assert "Jacket" in recommendation["clothing_items"]
     assert "Boots" in recommendation["clothing_items"]
     assert recommendation["is_viable"] is True
+
+
+def test_refresh_day_uses_current_recommendation_as_avoid_target() -> None:
+    service = RecommendationService()
+    captured: dict[str, object] = {}
+
+    def fake_build_outfit(clothing_items, day_forecast, day_num, history, avoid_outfit=None):
+        captured["avoid_outfit"] = avoid_outfit
+        return {
+            "day": day_num,
+            "date": day_forecast.get("date"),
+            "outfit_description": "Alternative outfit",
+            "clothing_items": ["Shirt", "Jeans"],
+            "selected_item_ids": ["top-2", "bottom-1"],
+            "weather_match": "Sunny, 18C",
+            "confidence": 0.9,
+            "recommendation_source": "rule-based",
+            "is_viable": True,
+            "day_warning": None,
+        }
+
+    service._build_outfit_for_day = fake_build_outfit  # type: ignore[method-assign]
+
+    current_recommendation = {
+        "day": 1,
+        "date": "2026-04-05",
+        "outfit_description": "Current outfit",
+        "clothing_items": ["Shirt", "Jeans"],
+        "selected_item_ids": ["top-1", "bottom-1"],
+        "weather_match": "Sunny, 18C",
+        "confidence": 0.9,
+        "recommendation_source": "rule-based",
+        "is_viable": True,
+        "day_warning": None,
+    }
+
+    refreshed = service.refresh_recommendation_for_day(
+        day=1,
+        clothing_data=_clothing_items(),
+        weather_forecast=_forecast(),
+        current_recommendation=current_recommendation,
+    )
+
+    assert captured["avoid_outfit"] == current_recommendation
+    assert refreshed["selected_item_ids"] == ["top-2", "bottom-1"]

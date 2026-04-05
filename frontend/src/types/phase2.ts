@@ -35,6 +35,7 @@ export interface Recommendation {
   outfit_description: string;
   clothing_items: string[];
   selected_item_ids?: string[];
+  selected_role_ids?: Record<string, string | null>;
   weather_match: string;
   confidence: number;
   recommendation_source?: "ai" | "rule-based" | string;
@@ -93,6 +94,7 @@ export interface RecommendationRefreshDayRequest {
   clothing_data: ClothingAnalysis[];
   weather_forecast: WeatherForecast[];
   location: string;
+  current_recommendation?: Recommendation;
 }
 
 export interface RecommendationRefreshDayResponse {

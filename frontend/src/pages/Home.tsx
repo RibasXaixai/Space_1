@@ -1002,6 +1002,8 @@ export default function Home() {
       [day]: null,
     }));
 
+    const currentRecommendation = recommendations?.find((item) => item.day === day) ?? null;
+
     setError(null);
     setRefreshingDay(day);
 
@@ -1013,9 +1015,17 @@ export default function Home() {
         clothing_data: clothingAnalyses,
         weather_forecast: weather,
         location,
+        current_recommendation: currentRecommendation ?? undefined,
       });
 
       const refreshed = response.data.recommendation;
+      const sameItemSelection =
+        JSON.stringify(currentRecommendation?.selected_item_ids ?? []) ===
+        JSON.stringify(refreshed.selected_item_ids ?? []);
+      const sameClothingLabels =
+        JSON.stringify(currentRecommendation?.clothing_items ?? []) ===
+        JSON.stringify(refreshed.clothing_items ?? []);
+
       setRecommendations((prev) => {
         if (!prev) return prev;
         return prev.map((item) => (item.day === day ? refreshed : item));
@@ -1024,6 +1034,10 @@ export default function Home() {
         ...prev,
         [day]: (prev[day] ?? 1) + 1,
       }));
+
+      if (sameItemSelection && sameClothingLabels) {
+        setError(`No different outfit was available for Day ${day} with your current wardrobe yet.`);
+      }
     } catch (err) {
       setError(getApiErrorMessage(err, "Failed to refresh this day."));
     } finally {

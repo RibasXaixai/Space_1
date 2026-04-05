@@ -65,6 +65,7 @@ class RecommendationSchema(BaseModel):
     outfit_description: str
     clothing_items: list[str]
     selected_item_ids: list[str] = []
+    selected_role_ids: dict[str, Optional[str]] = {}
     weather_match: str
     confidence: float
     recommendation_source: str = "rule-based"
@@ -88,6 +89,7 @@ class RecommendationRefreshDayRequest(LocationBoundRequest):
     day: int = Field(..., ge=1, le=7)
     clothing_data: list[ClothingAnalysisSchema]
     weather_forecast: list[WeatherForecastSchema]
+    current_recommendation: Optional[RecommendationSchema] = None
 
 
 class RecommendationRefreshDayResponse(BaseModel):
