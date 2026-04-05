@@ -1,3 +1,5 @@
 # Dev environment
 pip
 autopep8
+requests
+reportlab==4.4.10
