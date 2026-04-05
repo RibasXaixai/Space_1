@@ -48,6 +48,9 @@ export interface WeatherForecast {
   temperature: number;
   condition: string;
   humidity: number;
+  chance_of_rain?: number;
+  wind_kph?: number;
+  condition_icon?: string;
 }
 
 export interface AnalyzeClothesRequest {
@@ -118,6 +121,7 @@ export interface SendPlanWardrobeItem {
   category: string;
   color: string;
   gender: string;
+  image_data_url?: string;
 }
 
 export interface SendPlanEmailRequest {

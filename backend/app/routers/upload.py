@@ -1,4 +1,6 @@
-from fastapi import APIRouter, UploadFile, File
+from fastapi import APIRouter, File, Request, UploadFile
+from app.core.config import settings
+from app.core.rate_limit import RateLimitRule, rate_limiter
 from app.services.file_service import save_uploaded_file
 from app.services.clothing_analysis_service import ClothingAnalysisService
 from app.services.duplicate_detection_service import DuplicateDetectionService
@@ -16,10 +18,16 @@ router = APIRouter()
 # Initialize services once
 analysis_service = ClothingAnalysisService()
 duplicate_service = DuplicateDetectionService()
+upload_rate_limit_rule = RateLimitRule(
+    name="wardrobe-upload",
+    requests=settings.openai_upload_rate_limit,
+    window_seconds=settings.openai_rate_limit_window_seconds,
+)
 
 
 @router.post("/upload-clothing", response_model=ClothingUploadResponse)
-async def upload_clothing(files: list[UploadFile] = File(...)):
+async def upload_clothing(request: Request, files: list[UploadFile] = File(...)):
+    rate_limiter.enforce(request, upload_rate_limit_rule)
     """
     Upload multiple clothing images and get AI analysis for each.
     Duplicate detection is handled separately via /check-duplicates.

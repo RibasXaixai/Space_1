@@ -1,4 +1,6 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
+from app.core.config import settings
+from app.core.rate_limit import RateLimitRule, rate_limiter
 from app.services.email_service import EmailService
 from app.services.recommendation_service import RecommendationService
 from app.schemas.phase2 import (
@@ -28,9 +30,16 @@ except Exception as e:
     print(f"Warning: Failed to initialize EmailService: {str(e)}")
     email_service = None
 
+recommendation_rate_limit_rule = RateLimitRule(
+    name="recommendation-generation",
+    requests=settings.openai_recommendation_rate_limit,
+    window_seconds=settings.openai_rate_limit_window_seconds,
+)
+
 
 @router.post("/generate", response_model=RecommendationsGenerateResponse)
-def generate_recommendations(request: RecommendationsGenerateRequest):
+def generate_recommendations(request: RecommendationsGenerateRequest, http_request: Request):
+    rate_limiter.enforce(http_request, recommendation_rate_limit_rule)
     """
     Generate outfit recommendations based on clothing data and weather forecast.
 
@@ -66,8 +75,9 @@ def generate_recommendations(request: RecommendationsGenerateRequest):
 
 
 @router.post("/refresh-day", response_model=RecommendationRefreshDayResponse)
-def refresh_recommendation_day(request: RecommendationRefreshDayRequest):
+def refresh_recommendation_day(request: RecommendationRefreshDayRequest, http_request: Request):
     """Regenerate recommendation for one specific day using the same wardrobe and forecast."""
+    rate_limiter.enforce(http_request, recommendation_rate_limit_rule)
     if not recommendation_service:
         raise HTTPException(
             status_code=503,
@@ -91,8 +101,9 @@ def refresh_recommendation_day(request: RecommendationRefreshDayRequest):
 
 
 @router.post("/refresh-week", response_model=RecommendationRefreshWeekResponse)
-def refresh_recommendation_week(request: RecommendationRefreshWeekRequest):
+def refresh_recommendation_week(request: RecommendationRefreshWeekRequest, http_request: Request):
     """Regenerate the entire 5-day week, avoiding the currently shown outfits when possible."""
+    rate_limiter.enforce(http_request, recommendation_rate_limit_rule)
     if not recommendation_service:
         raise HTTPException(
             status_code=503,

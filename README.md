@@ -100,6 +100,20 @@ Open `http://localhost:5173`.
 - `POST /weather/forecast`
 - `POST /recommendations/generate`
 
+## Version 5 - MVP Security Note
+
+Because this project is being reviewed as an **instructor-facing MVP**, the current protection layer focuses on **server-side rate limiting** for the expensive OpenAI-powered actions instead of making `reCAPTCHA` mandatory right now.
+
+### Why this is enough for the MVP
+
+- It demonstrates that abuse risk was considered for guest-facing AI buttons.
+- It protects the most expensive routes such as upload analysis and recommendation generation.
+- It keeps the demo flow simple and avoids extra setup, API keys, and UI friction during review.
+
+### Production follow-up
+
+For a public release, the next hardening step would be to add **reCAPTCHA** (or similar bot protection) on top of the backend rate limits.
+
 ## Notes For Handoff
 
 - Backend now loads environment variables from `backend/.env` at startup.

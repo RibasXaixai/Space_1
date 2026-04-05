@@ -19,6 +19,12 @@ class Settings(BaseSettings):
     resend_api_key: str = ""
     email_from: str = "onboarding@resend.dev"
     public_backend_url: str = "http://localhost:8000"
+    openai_rate_limit_window_seconds: int = 300
+    openai_upload_rate_limit: int = 8
+    openai_recommendation_rate_limit: int = 12
+    enable_recaptcha: bool = False
+    recaptcha_secret_key: str = ""
+    recaptcha_min_score: float = 0.5
 
     class Config:
         env_file = Path(__file__).resolve().parents[2] / ".env"

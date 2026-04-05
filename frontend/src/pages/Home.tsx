@@ -105,6 +105,59 @@ export default function Home() {
 
   const isValidEmail = (value: string): boolean => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
 
+  const getApiErrorMessage = (err: unknown, fallback: string): string => {
+    const maybeError = err as { response?: { data?: { detail?: string; message?: string } } };
+    return (
+      maybeError.response?.data?.detail ||
+      maybeError.response?.data?.message ||
+      (err instanceof Error ? err.message : fallback)
+    );
+  };
+
+  const blobToDataUrl = (blob: Blob): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        if (typeof reader.result === "string") {
+          resolve(reader.result);
+          return;
+        }
+        reject(new Error("Image preview conversion failed."));
+      };
+      reader.onerror = () => reject(new Error("Image preview conversion failed."));
+      reader.readAsDataURL(blob);
+    });
+
+  const buildWardrobeItemsForEmail = async () => {
+    const analyzedItems = uploadedClothing.filter((item) => item.status === "analyzed");
+
+    return Promise.all(
+      analyzedItems.map(async (item) => {
+        let image_data_url: string | undefined;
+
+        if (item.preview) {
+          try {
+            const response = await fetch(item.preview, { mode: "cors" });
+            if (response.ok) {
+              image_data_url = await blobToDataUrl(await response.blob());
+            }
+          } catch (imageError) {
+            console.warn("Could not fetch wardrobe item preview for email.", imageError);
+          }
+        }
+
+        return {
+          id: item.id,
+          file_path: item.file_path,
+          category: item.analyzed?.category || "Unknown",
+          color: item.analyzed?.color || "Unknown",
+          gender: item.analyzed?.gender || "Unisex",
+          image_data_url,
+        };
+      })
+    );
+  };
+
   const normalizeCategoryLabel = (category: string | undefined): string => {
     return isNaCategory(category) ? "Needs Review" : (category || "");
   };
@@ -436,21 +489,15 @@ export default function Home() {
     setEmailSendState(null);
 
     try {
+      const wardrobeItemsForEmail = await buildWardrobeItemsForEmail();
+
       await sendPlanEmailPhase2({
         email: trimmedEmail,
         location,
         weather_forecast: weather,
         recommendations,
         warnings,
-        wardrobe_items: uploadedClothing
-          .filter((item) => item.status === "analyzed")
-          .map((item) => ({
-            id: item.id,
-            file_path: item.file_path,
-            category: item.analyzed?.category || "Unknown",
-            color: item.analyzed?.color || "Unknown",
-            gender: item.analyzed?.gender || "Unisex",
-          })),
+        wardrobe_items: wardrobeItemsForEmail,
       });
 
       setEmailSendState({
@@ -610,9 +657,7 @@ export default function Home() {
 
       setUploadedFromAPI(true);
     } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "An error occurred during upload."
-      );
+      setError(getApiErrorMessage(err, "An error occurred during upload."));
     } finally {
       setLoading(false);
       setUploadProgress({ uploaded: 0, total: 0 });
@@ -837,7 +882,7 @@ export default function Home() {
         }, {})
       );
     } catch (err) {
-      setError(err instanceof Error ? err.message : "An error occurred. Please try again.");
+      setError(getApiErrorMessage(err, "An error occurred. Please try again."));
     } finally {
       setLoading(false);
     }
@@ -924,7 +969,7 @@ export default function Home() {
       );
       setShowRefreshWeekModal(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to refresh the full week.");
+      setError(getApiErrorMessage(err, "Failed to refresh the full week."));
     } finally {
       setIsRefreshingWeek(false);
     }
@@ -980,7 +1025,7 @@ export default function Home() {
         [day]: (prev[day] ?? 1) + 1,
       }));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to refresh this day.");
+      setError(getApiErrorMessage(err, "Failed to refresh this day."));
     } finally {
       const cooldownUntil = Date.now() + REFRESH_COOLDOWN_MS;
       setRefreshCooldownUntilByDay((prev) => ({ ...prev, [day]: cooldownUntil }));
@@ -1243,6 +1288,7 @@ export default function Home() {
                     <img
                       src={item.preview}
                       alt={item.analyzed?.category || "clothing"}
+                      crossOrigin="anonymous"
                       className="h-28 w-full object-cover"
                     />
                     <div className="p-2">

@@ -40,9 +40,12 @@ export default function WeatherForecastDisplay({
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
         {forecast.map((day) => {
-          const date = new Date(day.date);
+          const date = new Date(`${day.date}T12:00:00`);
           const dayName = daysOfWeek[date.getDay()];
           const dateStr = date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+          const humidity = Math.round(day.humidity ?? 0);
+          const rainChance = Math.round(day.chance_of_rain ?? 0);
+          const windSpeed = Math.round(day.wind_kph ?? 0);
 
           return (
             <div key={day.day} className="rounded-2xl border border-slate-200 bg-gradient-to-br from-slate-50 to-slate-100 p-4 transition hover:-translate-y-0.5 hover:shadow-md">
@@ -65,16 +68,21 @@ export default function WeatherForecastDisplay({
                 </div>
 
                 <div className="grid grid-cols-2 gap-2 text-xs">
-                  <div className="rounded bg-blue-50 p-1.5 text-center">
-                    <p className="text-xs text-slate-500">💧</p>
-                    <p className="font-medium text-slate-900">{day.humidity}%</p>
+                  <div className="flex min-h-[68px] flex-col justify-between rounded-xl border border-blue-100 bg-blue-50 px-2.5 py-2 text-center shadow-sm">
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">💧 Humidity</p>
+                    <p className="text-base font-bold leading-none text-slate-900">{humidity}%</p>
                   </div>
-                  <div className="rounded bg-cyan-50 p-1.5 text-center">
-                    <p className="text-xs text-slate-500">🌧️</p>
-                    <p className="font-medium text-slate-900">
-                      {day.condition.toLowerCase().includes("rain") ? "High" : "Low"}
-                    </p>
+                  <div className="flex min-h-[68px] flex-col items-center justify-between rounded-xl border border-cyan-100 bg-cyan-50 px-2.5 py-2 text-center shadow-sm">
+                    <div className="flex flex-col items-center leading-none">
+                      <span className="text-xs">🌧️</span>
+                      <p className="mt-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Rain</p>
+                    </div>
+                    <p className="text-base font-bold leading-none text-slate-900">{rainChance}%</p>
                   </div>
+                </div>
+
+                <div className="rounded-lg bg-slate-100/80 px-2 py-1 text-center text-[11px] text-slate-500">
+                  💨 Wind <span className="font-semibold text-slate-700">{windSpeed} kph</span>
                 </div>
               </div>
             </div>

@@ -220,6 +220,7 @@ export default function RecommendationCard({
                   <img
                     src={match.preview}
                     alt={displayLabel}
+                    crossOrigin="anonymous"
                     className="h-24 w-full object-cover"
                   />
                 ) : (
