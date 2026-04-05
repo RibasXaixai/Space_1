@@ -57,6 +57,9 @@ def get_forecast(request: WeatherForecastRequest):
             temperature=day["max_temp"],
             condition=day["condition"],
             humidity=day["humidity"],
+            chance_of_rain=day.get("chance_of_rain", 0),
+            wind_kph=day.get("wind_kph", 0),
+            condition_icon=day.get("condition_icon", ""),
         )
         for day in forecast_data.get("forecast", [])
     ]

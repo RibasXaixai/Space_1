@@ -34,6 +34,9 @@ class WeatherForecastSchema(BaseModel):
     temperature: int
     condition: str
     humidity: int
+    chance_of_rain: int = 0
+    wind_kph: int = 0
+    condition_icon: str = ""
 
 
 class LocationBoundRequest(BaseModel):
@@ -112,6 +115,7 @@ class SendPlanWardrobeItemSchema(BaseModel):
     category: str
     color: str
     gender: str = "Unisex"
+    image_data_url: Optional[str] = None
 
 
 class SendPlanEmailRequest(LocationBoundRequest):

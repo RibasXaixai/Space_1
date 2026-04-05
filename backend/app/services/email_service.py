@@ -115,7 +115,14 @@ class EmailService:
                 for item_id in getattr(rec, "selected_item_ids", []) or []
                 if item_id in wardrobe_by_id
             ]
-            item_cards_html = self._build_item_cards_html(selected_items, rec.clothing_items, image_cid_by_item_id)
+            if not selected_items and rec.clothing_items:
+                selected_items = self._match_items_for_labels(wardrobe_items, rec.clothing_items)
+
+            item_cards_html = self._build_item_cards_html(
+                selected_items,
+                rec.clothing_items,
+                image_cid_by_item_id,
+            )
 
             recommendation_cards.append(
                 f"""
@@ -176,12 +183,20 @@ class EmailService:
             color = escape(self._clean_email_text(item.color, "Unknown"))
             gender = escape(self._clean_email_text(item.gender, "Unisex"))
 
+            display_item_id = self._get_wardrobe_display_id(item.id)
+            item_id_html = (
+                f"<p style='margin:0 0 6px;font-size:11px;color:#475569;'><strong>Wardrobe ID:</strong> {escape(display_item_id)}</p>"
+                if display_item_id
+                else ""
+            )
+
             items_html.append(
                 f"""
                 <div style='display:inline-block;vertical-align:top;width:140px;margin:0 10px 10px 0;border:1px solid #cbd5e1;border-radius:16px;overflow:hidden;background:#f8fafc;'>
                   {image_html}
                   <div style='padding:10px 10px 12px;'>
                     <p style='margin:0 0 4px;font-size:12px;font-weight:700;color:#0f172a;'>{title}</p>
+                    {item_id_html}
                     <p style='margin:0 0 6px;font-size:12px;color:#64748b;'>{color}</p>
                     <span style='display:inline-block;border:1px solid #d8b4fe;background:#f5f3ff;color:#7c3aed;border-radius:999px;padding:2px 8px;font-size:11px;font-weight:700;'>{gender}</span>
                   </div>
@@ -208,21 +223,6 @@ class EmailService:
 
         return "".join(items_html)
 
-    def _build_public_image_url(self, item: SendPlanWardrobeItemSchema) -> str | None:
-        raw_path = (item.file_path or "").strip()
-        if not raw_path:
-            return None
-
-        if raw_path.lower().startswith(("http://", "https://")):
-            return raw_path
-
-        base_url = (settings.public_backend_url or "").strip().rstrip("/")
-        if not base_url:
-            return None
-
-        normalized_path = "/" + raw_path.replace("\\", "/").lstrip("/")
-        return f"{base_url}{normalized_path}"
-
     def _clean_email_text(self, value: str | None, fallback: str = "") -> str:
         if value is None:
             return fallback
@@ -234,25 +234,30 @@ class EmailService:
         text = re.sub(r"\s+", " ", text).strip()
         return text or fallback
 
+    def _get_wardrobe_display_id(self, item_id: str | None) -> str:
+        raw_id = self._clean_email_text(item_id, "")
+        if not raw_id:
+            return ""
+
+        hash_value = 0
+        for char in raw_id:
+            hash_value = (hash_value * 31 + ord(char)) % 1_000_000
+
+        return str(hash_value).zfill(6)
+
     def _build_item_image_html(
         self,
         item: SendPlanWardrobeItemSchema,
         image_cid_by_item_id: dict[str, str],
     ) -> str:
         alt_text = escape(self._clean_email_text(item.category, "Wardrobe item"))
-        public_image_url = self._build_public_image_url(item)
         image_cid = image_cid_by_item_id.get(item.id)
-        fallback_link = (
-            f"<div style='padding:6px 8px;text-align:center;background:#ffffff;border-top:1px solid #e2e8f0;'><a href=\"{escape(public_image_url, quote=True)}\" style=\"font-size:11px;color:#4f46e5;text-decoration:none;\">Open photo</a></div>"
-            if public_image_url
-            else ""
-        )
 
         if image_cid:
-            return f"<div><img src=\"cid:{image_cid}\" alt=\"{alt_text}\" width=\"140\" height=\"92\" style=\"display:block;width:100%;height:92px;object-fit:cover;background:#e2e8f0;\" />{fallback_link}</div>"
-
-        if public_image_url:
-            return f"<div><img src=\"{escape(public_image_url, quote=True)}\" alt=\"{alt_text}\" width=\"140\" height=\"92\" style=\"display:block;width:100%;height:92px;object-fit:cover;background:#e2e8f0;\" />{fallback_link}</div>"
+            return (
+                f"<div><img src=\"cid:{image_cid}\" alt=\"{alt_text}\" width=\"140\" height=\"92\" "
+                f"style=\"display:block;width:100%;height:92px;object-fit:cover;background:#e2e8f0;\" /></div>"
+            )
 
         return f"<div style='height:92px;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#e0f2fe,#ede9fe);font-size:38px;text-align:center;'>{self._emoji_for_item(item.category)}</div>"
 
@@ -265,29 +270,152 @@ class EmailService:
         backend_root = Path(__file__).resolve().parents[2]
 
         for index, item in enumerate(wardrobe_items, start=1):
-            if not item.file_path:
+            try:
+                safe_item_id = re.sub(r"[^a-zA-Z0-9_-]+", "-", getattr(item, "id", str(index))).strip("-") or str(index)
+                content_id = f"wardrobe-item-{index}-{safe_item_id}"
+                inline_attachment = self._build_inline_attachment_from_data_url(
+                    getattr(item, "image_data_url", None),
+                    content_id,
+                    fallback_filename=f"wardrobe-item-{safe_item_id}.jpg",
+                )
+                if inline_attachment:
+                    attachments.append(inline_attachment)
+                    image_cid_by_item_id[item.id] = content_id
+                    continue
+
+                if not item.file_path:
+                    continue
+
+                normalized = item.file_path.replace("\\", "/").lstrip("/")
+                image_path = backend_root / normalized
+                if not image_path.exists() or not image_path.is_file():
+                    continue
+
+                mime_type = mimetypes.guess_type(image_path.name)[0] or "application/octet-stream"
+                if not mime_type.startswith("image/"):
+                    continue
+
+                encoded = base64.b64encode(image_path.read_bytes()).decode("ascii")
+                attachments.append(
+                    {
+                        "filename": image_path.name,
+                        "content": encoded,
+                        "contentType": mime_type,
+                        "contentId": content_id,
+                    }
+                )
+                image_cid_by_item_id[item.id] = content_id
+            except Exception:
                 continue
-
-            normalized = item.file_path.replace("\\", "/").lstrip("/")
-            image_path = backend_root / normalized
-            if not image_path.exists() or not image_path.is_file():
-                continue
-
-            mime_type = mimetypes.guess_type(image_path.name)[0] or "image/jpeg"
-            encoded = base64.b64encode(image_path.read_bytes()).decode("ascii")
-            content_id = f"wardrobe-item-{index}"
-
-            attachments.append(
-                {
-                    "filename": image_path.name,
-                    "content": encoded,
-                    "contentType": mime_type,
-                    "contentId": content_id,
-                }
-            )
-            image_cid_by_item_id[item.id] = content_id
 
         return image_cid_by_item_id, attachments
+
+    def _build_inline_attachment_from_data_url(
+        self,
+        data_url: str | None,
+        content_id: str,
+        fallback_filename: str,
+    ) -> dict | None:
+        raw_value = (data_url or "").strip()
+        if not raw_value:
+            return None
+
+        match = re.match(r"^data:(image/[a-zA-Z0-9.+-]+);base64,(.+)$", raw_value, flags=re.DOTALL)
+        if match:
+            mime_type = match.group(1)
+            encoded_content = re.sub(r"\s+", "", match.group(2))
+        else:
+            mime_type = mimetypes.guess_type(fallback_filename)[0] or "image/jpeg"
+            encoded_content = re.sub(r"\s+", "", raw_value)
+
+        if not mime_type.startswith("image/"):
+            return None
+
+        try:
+            base64.b64decode(encoded_content, validate=True)
+        except Exception:
+            return None
+
+        extension = mimetypes.guess_extension(mime_type) or Path(fallback_filename).suffix or ".jpg"
+        if extension == ".jpe":
+            extension = ".jpg"
+        filename = Path(fallback_filename).with_suffix(extension).name
+
+        return {
+            "filename": filename,
+            "content": encoded_content,
+            "contentType": mime_type,
+            "contentId": content_id,
+        }
+
+    def _match_items_for_labels(
+        self,
+        wardrobe_items: Sequence[SendPlanWardrobeItemSchema],
+        labels: Sequence[str],
+    ) -> list[SendPlanWardrobeItemSchema]:
+        matches: list[SendPlanWardrobeItemSchema] = []
+        used_ids: set[str] = set()
+
+        for label in labels:
+            normalized_label = self._normalize_item_label(label)
+            if not normalized_label:
+                continue
+
+            for item in wardrobe_items:
+                if item.id in used_ids:
+                    continue
+                item_label = self._normalize_item_label(item.category)
+                if not item_label:
+                    continue
+                if item_label == normalized_label or item_label in normalized_label or normalized_label in item_label:
+                    matches.append(item)
+                    used_ids.add(item.id)
+                    break
+
+        return matches
+
+    def _normalize_item_label(self, value: str | None) -> str:
+        cleaned = re.sub(r"[^a-z0-9]+", "", (value or "").strip().lower())
+        aliases = {
+            "tee": "tshirt",
+            "tshirt": "tshirt",
+            "shirt": "shirt",
+            "blouse": "shirt",
+            "top": "shirt",
+            "jean": "jeans",
+            "jeans": "jeans",
+            "trouser": "pants",
+            "trousers": "pants",
+            "pant": "pants",
+            "pants": "pants",
+            "short": "shorts",
+            "shorts": "shorts",
+            "hoodie": "hoodie",
+            "jacket": "jacket",
+            "coat": "jacket",
+            "blazer": "jacket",
+            "cardigan": "jacket",
+            "sweater": "sweater",
+            "dress": "dress",
+            "skirt": "skirt",
+            "shoe": "shoes",
+            "shoes": "shoes",
+            "sneaker": "shoes",
+            "sneakers": "shoes",
+            "boot": "shoes",
+            "boots": "shoes",
+            "sandal": "shoes",
+            "sandals": "shoes",
+        }
+
+        if cleaned in aliases:
+            return aliases[cleaned]
+
+        for key, mapped in aliases.items():
+            if key in cleaned:
+                return mapped
+
+        return cleaned
 
     def _emoji_for_item(self, name: str) -> str:
         normalized = (name or "").strip().lower()

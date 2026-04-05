@@ -87,10 +87,10 @@ class WeatherService:
                     "max_temp": round(day_obj.get("maxtemp_c", 0)),
                     "condition": condition_obj.get("text", "Unknown"),
                     "condition_icon": condition_obj.get("icon", ""),
-                    "chance_of_rain": day_obj.get("daily_chance_of_rain", 0),
-                    "snow_indicator": day_obj.get("daily_chance_of_snow", 0),
+                    "chance_of_rain": int(day_obj.get("daily_chance_of_rain") or 0),
+                    "snow_indicator": int(day_obj.get("daily_chance_of_snow") or 0),
                     "wind_kph": round(day_obj.get("maxwind_kph", 0)),
-                    "humidity": day_obj.get("avg_humidity", 0),
+                    "humidity": round(day_obj.get("avghumidity", 0)),
                 })
             
             return {
