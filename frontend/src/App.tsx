@@ -4,11 +4,12 @@ import Home from "./pages/Home";
 function App() {
   return (
     <div className="min-h-screen bg-app-bg text-slate-900">
-      <BrowserRouter>
+      <BrowserRouter basename={import.meta.env.BASE_URL}>
         <div className="mx-auto max-w-6xl px-4 py-6 sm:px-6 sm:py-8">
           <main>
             <Routes>
               <Route path="/" element={<Home />} />
+              <Route path="*" element={<Home />} />
             </Routes>
           </main>
         </div>
