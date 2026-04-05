@@ -1,74 +1,79 @@
 # Amazing Wardrobe Planner
 
-Amazing Wardrobe Planner is a full-stack app that helps users upload clothes, fetch a 5-day weather forecast, and generate daily outfit recommendations.
+A full-stack web app that helps a user upload clothing photos, check the weather for a trip, and generate a simple 5-day outfit plan.
+
+## Live Links
+
+- **Frontend:** `https://ribasxaixai.github.io/Space_1/`
+- **Backend health check:** `https://space-1-r5dq.onrender.com/health/`
+
+---
+
+## Project Overview
+
+This project was built as an MVP submission. The main flow is:
+
+1. Upload clothing photos
+2. Review or confirm detected clothing items
+3. Enter a trip location
+4. Fetch a 5-day weather forecast
+5. Generate outfit recommendations for each day
+6. Refresh a day if the user does not like the suggestion
+7. Optionally send the final plan by email as a PDF attachment
+
+## Main Features
+
+- Multi-image clothing upload
+- Clothing analysis with OpenAI support and fallback behavior
+- 5-day weather forecast using WeatherAPI
+- Outfit recommendation generation based on wardrobe + forecast
+- `Refresh day` and `Refresh week` interactions
+- Warnings when the wardrobe may not fit the expected weather
+- Email export of the wardrobe plan as a PDF
+- Responsive React interface for demo/submission use
 
 ## Tech Stack
 
-- Backend: FastAPI, Uvicorn, Python
-- Frontend: React, TypeScript, Vite, Tailwind CSS
-- AI + APIs: OpenAI (image analysis), WeatherAPI (forecast)
+| Layer | Tools |
+|---|---|
+| Frontend | React, TypeScript, Vite, Tailwind CSS |
+| Backend | FastAPI, Uvicorn, Python |
+| APIs | OpenAI, WeatherAPI, Resend |
+| Deployment | GitHub Pages + Render |
 
-## Project Structure
+## Active MVP Files
 
-- `backend/app/main.py`: FastAPI entrypoint and active route registration.
-- `backend/app/routers/upload.py`: upload and clothing analysis endpoint.
-- `backend/app/routers/weather_forecast.py`: 5-day weather endpoint.
-- `backend/app/routers/recommendations.py`: recommendation generation endpoint.
-- `frontend/src/pages/Home.tsx`: complete MVP flow UI.
-- `frontend/src/services/phase2.ts`: frontend API integration used by the MVP flow.
+- `frontend/src/pages/Home.tsx` — main user flow UI
+- `frontend/src/services/phase2.ts` — frontend API calls
+- `backend/app/main.py` — FastAPI entrypoint
+- `backend/app/routers/upload.py` — upload + clothing analysis
+- `backend/app/routers/weather_forecast.py` — weather forecast endpoint
+- `backend/app/routers/recommendations.py` — recommendation endpoints
 
-## What Is Implemented
+---
 
-- Multi-image clothing upload.
-- Clothing analysis using OpenAI Vision (with fallback behavior when unavailable).
-- Location-based 5-day weather forecast using WeatherAPI.
-- Rule-based outfit recommendations for the next 5 days.
-- Wardrobe viability warnings (cold/rain/hot edge cases).
-- Per-day Like / Don’t like frontend feedback state.
-- Polished responsive UI with loading, empty, and error states.
+## Submission Notes
 
-## What Is Simplified
+This repository contains some extra or legacy files from earlier phases, but the **main submission flow** is the deployed web app linked above.
 
-- No user accounts in the active MVP flow.
-- No persistent feedback storage.
-- No database persistence required for the core flow.
-- Recommendation logic is rule-based and intentionally lightweight.
+### What is included in the MVP
 
-## Required API Keys
+- Upload and analyze clothing items
+- View forecast for a chosen location
+- Generate and refresh outfit recommendations
+- Display wardrobe warnings for difficult weather situations
+- Export the final wardrobe plan by email
 
-- `OPENAI_API_KEY`: required for real clothing image analysis.
-- `WEATHER_API_KEY`: required for real weather forecast data.
+### What is intentionally simplified
 
-If either key is missing, related features will return fallback behavior or unavailability errors.
+- No required login for the core demo flow
+- No persistent database storage for the MVP interaction
+- Recommendation logic is lightweight and demo-friendly
+- Some image analyses may require manual review when fallback mode is used
 
-## Environment Setup
+> If OpenAI is unavailable or an image is unclear, an item may appear under **Needs review** before it can be used in recommendations.
 
-Use the templates:
-
-- `backend/.env.example`
-- `frontend/.env.example`
-- `.env.example` (reference copy)
-
-### Backend `.env`
-
-Create `backend/.env`:
-
-```env
-OPENAI_API_KEY=your_openai_api_key
-WEATHER_API_KEY=your_weatherapi_key
-DATABASE_URL=postgresql://user:password@localhost:5432/ai_wardrobe
-SECRET_KEY=change-me
-```
-
-`DATABASE_URL` and `SECRET_KEY` are kept for compatibility with non-MVP modules, but not required for the active MVP route flow.
-
-### Frontend `.env`
-
-Create `frontend/.env`:
-
-```env
-VITE_API_URL=http://localhost:8000
-```
+---
 
 ## Local Setup
 
@@ -93,33 +98,55 @@ npm run dev
 
 Open `http://localhost:5173`.
 
-## API Route Structure (Active MVP)
+---
+
+## Environment Variables
+
+### Backend (`backend/.env`)
+
+```env
+OPENAI_API_KEY=your_openai_api_key
+WEATHER_API_KEY=your_weatherapi_key
+RESEND_API_KEY=your_resend_api_key
+EMAIL_FROM=onboarding@resend.dev
+DATABASE_URL=postgresql://user:password@localhost:5432/ai_wardrobe
+SECRET_KEY=change-me
+```
+
+### Frontend (`frontend/.env`)
+
+```env
+VITE_API_URL=http://localhost:8000
+```
+
+For the deployed version, `VITE_API_URL` points to the Render backend.
+
+---
+
+## API Endpoints Used in the MVP
 
 - `GET /health/`
 - `POST /upload-clothing`
+- `POST /check-duplicates`
 - `POST /weather/forecast`
 - `POST /recommendations/generate`
+- `POST /recommendations/refresh-day`
+- `POST /recommendations/refresh-week`
+- `POST /recommendations/email-plan`
 
-## Version 5 - MVP Security Note
+---
 
-Because this project is being reviewed as an **instructor-facing MVP**, the current protection layer focuses on **server-side rate limiting** for the expensive OpenAI-powered actions instead of making `reCAPTCHA` mandatory right now.
+## Security Note
 
-### Why this is enough for the MVP
+For this MVP, the main protection added is **server-side rate limiting** on the more expensive AI-related actions. This keeps the demo simple while still showing that abuse prevention was considered.
 
-- It demonstrates that abuse risk was considered for guest-facing AI buttons.
-- It protects the most expensive routes such as upload analysis and recommendation generation.
-- It keeps the demo flow simple and avoids extra setup, API keys, and UI friction during review.
+For a future production version, additional protection such as **reCAPTCHA** would be a reasonable next step.
 
-### Production follow-up
+---
 
-For a public release, the next hardening step would be to add **reCAPTCHA** (or similar bot protection) on top of the backend rate limits.
+## Shareable Submission Link
 
-> Note: for this MVP, we did **not** do deep tuning on the exact number of clicks/requests needed to trigger the block. The current thresholds are intentionally simple demo-safe defaults and would be calibrated further for a real production rollout.
+If you only need one link for review, share:
 
-## Notes For Handoff
+**`https://ribasxaixai.github.io/Space_1/`**
 
-- Backend now loads environment variables from `backend/.env` at startup.
-- Frontend MVP API calls are centralized in `frontend/src/services/phase2.ts` for consistency.
-- The React frontend is the main app to share for review; `localhost` links only work on the local machine, so the project must be deployed to share it with an instructor.
-- Wardrobe-plan emails now send a short summary in the email body and attach the full multi-page visual plan as a PDF.
-- Legacy/non-MVP modules may remain in the repository but are not part of the active handoff flow.
