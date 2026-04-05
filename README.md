@@ -114,6 +114,8 @@ Because this project is being reviewed as an **instructor-facing MVP**, the curr
 
 For a public release, the next hardening step would be to add **reCAPTCHA** (or similar bot protection) on top of the backend rate limits.
 
+> Note: for this MVP, we did **not** do deep tuning on the exact number of clicks/requests needed to trigger the block. The current thresholds are intentionally simple demo-safe defaults and would be calibrated further for a real production rollout.
+
 ## Notes For Handoff
 
 - Backend now loads environment variables from `backend/.env` at startup.
