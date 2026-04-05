@@ -210,6 +210,13 @@ class RecommendationService:
 
         ai_outfit = self._build_ai_outfit_for_day(clothing_items, day_forecast, day_num, history)
         if ai_outfit is not None:
+            ai_outfit = self._complete_ai_outfit_with_weather_support(
+                ai_outfit=ai_outfit,
+                clothing_items=clothing_items,
+                temp=temp,
+                condition=condition,
+                warmth_need=warmth_need,
+            )
             ai_role_items = self._select_primary_items_by_role(
                 self._match_labels_to_wardrobe_items(ai_outfit.get("clothing_items", []), clothing_items)
             )
@@ -227,11 +234,23 @@ class RecommendationService:
             ai_outfit["is_viable"] = ai_is_viable
             ai_outfit["day_warning"] = ai_day_warning
 
-            if ai_is_viable and not self._violates_rotation_rules(
+            ai_has_rotation_conflict = self._violates_rotation_rules(
                 ai_outfit.get("clothing_items", []),
                 history,
                 ai_outfit.get("selected_role_ids"),
-            ) and not self._matches_avoid_outfit(ai_outfit, avoid_outfit):
+            )
+            ai_matches_avoid = self._matches_avoid_outfit(ai_outfit, avoid_outfit)
+            ai_repeat_is_unavoidable = self._allow_ai_repeat_when_wardrobe_is_limited(
+                clothing_items=clothing_items,
+                outfit_items=ai_outfit.get("clothing_items", []),
+                history=history,
+                selected_role_ids=ai_outfit.get("selected_role_ids"),
+                avoid_outfit=avoid_outfit,
+            )
+
+            if ai_is_viable and (not ai_has_rotation_conflict or ai_repeat_is_unavoidable) and (
+                not ai_matches_avoid or ai_repeat_is_unavoidable
+            ):
                 return ai_outfit
 
         top_candidates = self._get_candidates_for_role(clothing_items, "top", warmth_need)
@@ -500,6 +519,119 @@ class RecommendationService:
         random.shuffle(candidates)
         return candidates
 
+    def _complete_ai_outfit_with_weather_support(
+        self,
+        ai_outfit: dict,
+        clothing_items: list[dict],
+        temp: int,
+        condition: str,
+        warmth_need: str,
+    ) -> dict:
+        matched_items = self._match_labels_to_wardrobe_items(ai_outfit.get("clothing_items", []), clothing_items)
+        role_items = self._select_primary_items_by_role(matched_items)
+
+        if role_items.get("dress") is None:
+            if role_items.get("top") is None:
+                role_items["top"] = self._choose_best_candidate_for_role(clothing_items, "top", warmth_need, condition, temp)
+            if role_items.get("bottom") is None:
+                role_items["bottom"] = self._choose_best_candidate_for_role(clothing_items, "bottom", warmth_need, condition, temp)
+
+        if self._is_cold_or_rainy(temp, condition) and role_items.get("outerwear") is None:
+            role_items["outerwear"] = self._choose_best_candidate_for_role(clothing_items, "outerwear", warmth_need, condition, temp)
+
+        current_shoes = role_items.get("shoes")
+        current_shoes_are_weather_ready = current_shoes is not None and (
+            self._weather_suitability_matches(str(current_shoes.get("weather_suitability", "")), condition, temp)
+            or any(token in str(current_shoes.get("category", "")).lower() for token in ["boot", "shoe", "sneaker"])
+        )
+        if current_shoes is None or (self._is_rainy(condition) and not current_shoes_are_weather_ready):
+            better_shoes = self._choose_best_candidate_for_role(clothing_items, "shoes", warmth_need, condition, temp)
+            if better_shoes is not None:
+                role_items["shoes"] = better_shoes
+
+        ordered_items = self._ordered_selected_items_from_roles(role_items)
+        if ordered_items:
+            ai_outfit["clothing_items"] = [str(item.get("category", "")).title() for item in ordered_items if item.get("category")]
+            ai_outfit["selected_item_ids"] = [
+                str(item.get("item_id"))
+                for item in ordered_items
+                if item.get("item_id")
+            ]
+            ai_outfit["selected_role_ids"] = self._get_selected_role_ids(ordered_items)
+
+        return ai_outfit
+
+    def _choose_best_candidate_for_role(
+        self,
+        clothing_items: list[dict],
+        role: str,
+        warmth_need: str,
+        condition: str,
+        temp: int,
+    ) -> Optional[dict]:
+        candidates = self._get_candidates_for_role(clothing_items, role, warmth_need)
+        if not candidates:
+            return None
+
+        def candidate_score(item: dict) -> tuple[int, int]:
+            score = 0
+            category = str(item.get("category", "")).lower()
+            suitability = str(item.get("weather_suitability", ""))
+            warmth = self._normalize_warmth_level(item.get("warmth_level", "medium"))
+
+            if self._weather_suitability_matches(suitability, condition, temp):
+                score += 5
+            if warmth == warmth_need:
+                score += 3
+            elif warmth_need == "warm" and warmth == "moderate":
+                score += 2
+            elif warmth_need == "light" and warmth == "moderate":
+                score += 1
+
+            if role == "outerwear":
+                if self._is_rainy(condition) and any(token in category for token in ["rain", "jacket", "coat", "parka"]):
+                    score += 4
+                elif temp <= 12 and any(token in category for token in ["coat", "jacket", "parka", "hoodie"]):
+                    score += 2
+
+            if role == "shoes":
+                if self._is_rainy(condition) and "boot" in category:
+                    score += 5
+                elif self._is_rainy(condition) and any(token in category for token in ["shoe", "sneaker"]):
+                    score += 2
+
+            return score, len(category)
+
+        return max(candidates, key=candidate_score)
+
+    def _ordered_selected_items_from_roles(self, role_items: dict[str, Optional[dict]]) -> list[dict]:
+        ordered: list[dict] = []
+        dress = role_items.get("dress")
+        if dress is not None:
+            ordered.append(dress)
+        else:
+            if role_items.get("top") is not None:
+                ordered.append(role_items["top"])
+            if role_items.get("bottom") is not None:
+                ordered.append(role_items["bottom"])
+
+        if role_items.get("outerwear") is not None:
+            ordered.append(role_items["outerwear"])
+        if role_items.get("shoes") is not None:
+            ordered.append(role_items["shoes"])
+
+        seen_ids: set[str] = set()
+        unique_items: list[dict] = []
+        for item in ordered:
+            item_id = str(item.get("item_id", "")) if item else ""
+            if item_id and item_id in seen_ids:
+                continue
+            if item_id:
+                seen_ids.add(item_id)
+            unique_items.append(item)
+
+        return unique_items
+
     def _score_outfit(
         self,
         selected_items: list[dict],
@@ -642,6 +774,73 @@ class RecommendationService:
             return True
 
         return False
+
+    def _allow_ai_repeat_when_wardrobe_is_limited(
+        self,
+        clothing_items: list[dict],
+        outfit_items: list[str],
+        history: list[dict],
+        selected_role_ids: Optional[dict[str, Optional[str]]] = None,
+        avoid_outfit: Optional[dict] = None,
+    ) -> bool:
+        if not history:
+            return False
+
+        def role_is_limited(role: str) -> bool:
+            distinct_categories = self._get_distinct_categories_for_role(clothing_items, role)
+            if len(distinct_categories) <= 1:
+                return True
+
+            unique_item_ids = {
+                str(item.get("item_id"))
+                for item in clothing_items
+                if self._categorize_clothing(item) == role and item.get("item_id")
+            }
+            return len(unique_item_ids) <= 1
+
+        current_signature = self._build_outfit_signature(outfit_items)
+        previous_signature = self._build_outfit_signature(history[-1].get("clothing_items", []))
+        if current_signature == previous_signature and not (role_is_limited("top") and role_is_limited("bottom")):
+            return False
+
+        current_role_ids = selected_role_ids or {}
+        previous_role_ids = history[-1].get("selected_role_ids", {}) if history else {}
+
+        top_repeat = False
+        bottom_repeat = False
+
+        if current_role_ids.get("top") and previous_role_ids.get("top") == current_role_ids.get("top"):
+            top_repeat = True
+        if current_role_ids.get("bottom") and previous_role_ids.get("bottom") == current_role_ids.get("bottom"):
+            bottom_repeat = True
+
+        current_top = self._extract_role_label(outfit_items, "top")
+        current_bottom = self._extract_role_label(outfit_items, "bottom")
+        recent_tops = [self._extract_role_label(day.get("clothing_items", []), "top") for day in history[-2:]]
+        recent_bottoms = [self._extract_role_label(day.get("clothing_items", []), "bottom") for day in history[-2:]]
+
+        if current_top and recent_tops and recent_tops[-1] == current_top:
+            top_repeat = True
+        if current_bottom and recent_bottoms and recent_bottoms[-1] == current_bottom:
+            bottom_repeat = True
+        if current_top and len(recent_tops) >= 2 and recent_tops[-1] == current_top and recent_tops[-2] == current_top:
+            top_repeat = True
+        if current_bottom and len(recent_bottoms) >= 2 and recent_bottoms[-1] == current_bottom and recent_bottoms[-2] == current_bottom:
+            bottom_repeat = True
+
+        if avoid_outfit:
+            avoid_role_ids = avoid_outfit.get("selected_role_ids", {})
+            if current_role_ids.get("top") and current_role_ids.get("top") == avoid_role_ids.get("top"):
+                top_repeat = True
+            if current_role_ids.get("bottom") and current_role_ids.get("bottom") == avoid_role_ids.get("bottom"):
+                bottom_repeat = True
+
+        if top_repeat and not role_is_limited("top"):
+            return False
+        if bottom_repeat and not role_is_limited("bottom"):
+            return False
+
+        return top_repeat or bottom_repeat or current_signature == previous_signature
 
     def _canonical_item_label(self, label: str) -> str:
         normalized = str(label).strip().lower()
@@ -814,12 +1013,20 @@ class RecommendationService:
                     }
                     for previous in (history or [])[-2:]
                 ],
+                "available_by_role": {
+                    "tops": self._get_distinct_categories_for_role(clothing_items, "top"),
+                    "bottoms": self._get_distinct_categories_for_role(clothing_items, "bottom"),
+                    "dresses": self._get_distinct_categories_for_role(clothing_items, "dress"),
+                    "outerwear": self._get_distinct_categories_for_role(clothing_items, "outerwear"),
+                    "shoes": self._get_distinct_categories_for_role(clothing_items, "shoes"),
+                },
                 "rules": [
                     "Use only clothing categories that exist in wardrobe.",
                     "Return a safe option for weather conditions.",
                     "Weather suitability is more important than variety.",
-                    "Avoid repeating the exact same full outfit as the previous day.",
+                    "Avoid repeating the exact same full outfit as the previous day when a real alternative exists.",
                     "Avoid using the same top or bottom for a third consecutive day unless the wardrobe is too limited.",
+                    "If only one usable top or bottom exists, repetition is acceptable and you should still return the best AI outfit for that day.",
                     "If no complete outfit is possible, mark is_viable=false and explain briefly.",
                     "Provide a fresh alternative option when possible.",
                 ],

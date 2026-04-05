@@ -120,4 +120,6 @@ For a public release, the next hardening step would be to add **reCAPTCHA** (or 
 
 - Backend now loads environment variables from `backend/.env` at startup.
 - Frontend MVP API calls are centralized in `frontend/src/services/phase2.ts` for consistency.
+- The React frontend is the main app to share for review; `localhost` links only work on the local machine, so the project must be deployed to share it with an instructor.
+- Wardrobe-plan emails now send a short summary in the email body and attach the full multi-page visual plan as a PDF.
 - Legacy/non-MVP modules may remain in the repository but are not part of the active handoff flow.
